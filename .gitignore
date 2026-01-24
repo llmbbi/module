@@ -1,0 +1,19 @@
+# Environments
+envs/
+__pycache__/
+*.pyc
+
+# Outputs and Logs
+outputs/
+logs/
+results/
+unsloth_compiled_cache/
+
+# System
+.DS_Store
+
+# Installers
+Miniconda*
+
+# Virtual Envs
+.venv/
