@@ -9,6 +9,8 @@ scikit-learn
 matplotlib
 lime
 tqdm
-captum==0.8.0
 shap
 unsloth
+trl
+numpy
+scipy
