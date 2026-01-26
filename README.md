@@ -34,7 +34,119 @@ Dynamically Computed Properties
 
 These scores are calculated during execution based on the specific Llama-3.2-1B model and SST-2 dataset: F1.1 Scope: Measures the diversity of features selected across the evaluation set. F1.4 Practicality: Calculated as the average of F11 (Speed) and F1.3 (Access). F3 Selectivity: Measures feature selectivity using Gini coefficient based on LIME/SHAP weights. F4.1 Contrastivity: Measures whether explanations contain both positive and negative contributions. F4.2 Target Sensitivity: Measures divergence in LIME explanations between opposite class labels. F6.1 Fidelity Check: Measures how well LIME/SHAP approximations match the model's predicted probabilities (scaled 0-5). F6.2 Surrogate Agreement: Measures fidelity on the original scale (0-1) for the local linear approximation. F7.1 Incremental Deletion: Measures prediction drop when top features are iteratively masked from the input. F9.1 Similarity (Stability): Measures consistency of explanations under input perturbations. F9.2 Identity: Measures consistency of feature rankings across multiple explanation runs. F11 Speed: Measures execution time per explanation (scaled to 1-5).
 
+## Modular Interpretability Pipeline (`run_pipeline_modular.py`)
 
+This script provides a **single entry point** for running a modular interpretability and bias analysis pipeline on SST-2 using `unsloth/Llama-3.2-1B-Instruct`. It supports zero-shot evaluation, LoRA fine-tuning, LIME/SHAP attribution, functionally grounded XAI metrics, and bias analysis within one workflow. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+### Functionality
+
+`run_pipeline_modular.py` performs the following steps: [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- Loads SST-2 (`stanfordnlp/sst2`) and evaluates the base model on the validation split (zero-shot).  
+- Computes LIME and SHAP explanations on sampled validation examples and aggregates them into XAI property scores (faithfulness, contrastivity, stability, etc.).  
+- Runs bias analysis by inspecting attributions on sentences containing gendered tokens (e.g., “he”, “she”, “woman”, “man”).  
+- Optionally fine-tunes the model with LoRA on the SST-2 train split and repeats performance, XAI, and bias analysis for the fine-tuned model.  
+- Saves a consolidated JSON results file and comparison plots (zero-shot vs fine-tuned). [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+### Arguments
+
+Run:
+
+```bash
+python run_pipeline_modular.py [FLAGS...]
+```
+
+Core flags: [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `--model-name`  
+  Hugging Face model name, default: `unsloth/Llama-3.2-1B-Instruct`.
+
+- `--output-dir`  
+  Directory to store all results and plots, default: `outputs/modular_pipeline_fixed`.
+
+- `--train-size`  
+  Number of training samples from SST-2 `train` split.  
+  - `> 0`: subsample this many examples.  
+  - `<= 0`: use the full training split.
+
+- `--eval-sample-size`  
+  Number of validation examples used for attribution/XAI metrics, default: `50`. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `--epochs`  
+  Number of epochs for LoRA fine-tuning, default: `1.0`. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `--finetune`  
+  Enable LoRA fine-tuning and post-finetuning evaluation.  
+  Flag is `store_true` with default `True`, so fine-tuning runs unless you pass `--no-finetune`. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `--max-seq-length`  
+  Maximum sequence length for tokenization, default: `512`. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `--load-in-4bit`  
+  Load base model in 4-bit for memory efficiency.  
+  `store_true`, default `True`. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `--run-xai`  
+  Compute LIME/SHAP-based XAI metrics (zero-shot and, if enabled, fine-tuned).  
+  `store_true`, default `True`. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+### Example commands
+
+Full pipeline (zero-shot + LoRA fine-tuning + XAI + bias):
+
+```bash
+python run_pipeline_modular.py \
+  --model-name unsloth/Llama-3.2-1B-Instruct \
+  --output-dir outputs/modular_pipeline_full \
+  --train-size 2000 \
+  --eval-sample-size 50 \
+  --epochs 1.0 \
+  --finetune \
+  --load-in-4bit \
+  --run-xai
+```
+
+Zero-shot only (no fine-tuning):
+
+```bash
+python run_pipeline_modular.py \
+  --model-name unsloth/Llama-3.2-1B-Instruct \
+  --output-dir outputs/modular_zero_shot_only \
+  --train-size 0 \
+  --eval-sample-size 50 \
+  --epochs 1.0 \
+  --load-in-4bit \
+  --run-xai \
+  --no-finetune
+```
+
+Quick diagnostic (zero-shot, no XAI metrics):
+
+```bash
+python run_pipeline_modular.py \
+  --output-dir outputs/modular_quick \
+  --no-finetune \
+  --no-run-xai
+```
+
+### Outputs
+
+All artifacts are stored in `--output-dir`: [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `modular_pipeline_results.json`  
+  Contains:
+  - `zero_shot_performance`, `finetuned_performance` (accuracy, precision, recall, F1, MCC)  
+  - `zero_shot_attributions`, `finetuned_attributions` (XAI property scores for LIME and SHAP)  
+  - `zero_shot_bias`, `finetuned_bias` (bias metrics from demographic-term analysis). [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `model_performance_comparison.png`  
+  Bar chart comparing zero-shot vs fine-tuned metrics. [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+- `xai_properties_comparison_zero-shot.png`  
+- `xai_properties_comparison_fine-tuned.png`  
+  Horizontal bar charts for XAI properties (e.g., Scope, Selectivity, Fidelity, Deletion, Sufficiency, Similarity, Identity, Monotonicity, Compactness, Speed). [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
+
+Bias analysis currently focuses on gendered tokens, but the same pattern can be extended in `detect_bias` to capture other demographic categories (race, age, etc.). [github](https://github.com/llmbbi/module/blob/main/run_pipeline_modular.py)
 ## Getting Started
 
 ### Prerequisites
