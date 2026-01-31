@@ -24,11 +24,11 @@ This implementation references three major approaches for model explanation:
   
 - **ROAR (Remove And Retrain)**: A direct faithfulness evaluation method that measures how much model accuracy drops when top-ranked features are iteratively removed and the model is retrained. While computationally expensive for large models, ROAR provides a strong empirical measure of explanation fidelity.
 
-- **Integrated Gradients (IG)**: Accumulates gradients from baseline (masked/zero embeds) to input via Riemann integration (20 steps). Captures full attribution paths satisfying completeness/sensitivity axioms. Impl: `interpretability_lib.attribution.integrated_gradients` [web:0].
+- **Integrated Gradients (IG)**: Accumulates gradients from baseline (masked/zero embeds) to input via Riemann integration (20 steps). Captures full attribution paths satisfying completeness/sensitivity axioms. 
   
-- **IG Occlusion**: Hybrid—uses IG attribution map to guide occlusion mask placement, computing faithfulness via masked logit importance (steps=5, baseline='zeros'). New in fd62fa1 [page:4].
+- **IG Occlusion**: Hybrid—uses IG attribution map to guide occlusion mask placement, computing faithfulness via masked logit importance (steps=5, baseline='zeros'). 
   
-- **Attention Rollout**: Layer-wise attention propagation (via matrix mult) for holistic token relevance. Robust for multi-hop reasoning [web:2].
+- **Attention Rollout**: Layer-wise attention propagation (via matrix mult) for holistic token relevance. Robust for multi-hop reasoning.
 
 For classification evaluation, we complement accuracy-based metrics with the **Matthews Correlation Coefficient (MCC)**, which provides a balanced score (−1 to +1) that remains informative under class imbalance. An MCC of +1 indicates perfect predictions, 0 matches random guessing, and −1 reflects complete disagreement.
 
