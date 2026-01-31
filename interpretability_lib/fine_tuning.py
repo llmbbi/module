@@ -118,11 +118,10 @@ class LoRAFineTuner:
             model=self.model,
             tokenizer=self.tokenizer,
             train_dataset=formatted_dataset,
-            max_seq_length=self.max_seq_length,
             dataset_num_proc=2,
             packing=False,
             data_collator=DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False),
-            args=TrainingArguments(
+            args=SFTConfig(
                 output_dir=f"{self.output_dir}/checkpoints",
                 num_train_epochs=epochs,
                 per_device_train_batch_size=batch_size,
@@ -137,6 +136,7 @@ class LoRAFineTuner:
                 lr_scheduler_type="linear",
                 seed=42,
                 save_strategy="no",
+                max_seq_length=self.max_seq_length,
             ),
         )
         

@@ -1,0 +1,21 @@
+---------------------------------------
+Begin Slurm Prolog: Jan-26-2026 16:20:34
+Job ID:    4029874
+User ID:   jyoon370
+Account:   coc
+Job name:  gpu_test
+Partition: ice-bw-cpu
+QOS:       coc-ice
+---------------------------------------
+---------------------------------------
+Begin Slurm Epilog: Jan-26-2026 16:20:36
+Job ID:        4029874
+User ID:       jyoon370
+Account:       coc
+Job name:      gpu_test
+Resources:     cpu=1,gres/gpu:rtx_pro_6000_blackwell=1,mem=12G,node=1
+Rsrc Used:     cput=00:00:05,vmem=0,walltime=00:00:05,mem=26748K,energy_used=0
+Partition:     ice-bw-cpu
+QOS:           coc-ice
+Nodes:         atl1-1-01-009-33-0
+---------------------------------------

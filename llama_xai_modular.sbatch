@@ -28,6 +28,7 @@ mkdir -p "$SCRATCH_OUT_DIR" "$STORAGE_OUT_ROOT"
 SCRIPT_PATH=/home/hice1/jyoon370/scratch/llm-interpretability/run_pipeline_modular.py
 
 echo "[INFO] Writing outputs to scratch: $SCRATCH_OUT_DIR"
+echo "[INFO] Running enhanced interpretability pipeline with extended XAI methods"
 python "$SCRIPT_PATH" \
     --model-name unsloth/Llama-3.2-1B-Instruct  \
     --train-size 0 \
@@ -35,9 +36,13 @@ python "$SCRIPT_PATH" \
     --epochs 1 \
     --output-dir "$SCRATCH_OUT_DIR" \
     --finetune \
-    --load-in-4bit
+    --load-in-4bit \
+    --run-xai \
+    --extended-xai \
+    --run-shift-analysis
 
 STATUS=$?
 echo "[INFO] Syncing outputs to storage: $STORAGE_OUT_DIR"
 rsync -avh "$SCRATCH_OUT_DIR"/ "$STORAGE_OUT_DIR"/
 exit $STATUS
+

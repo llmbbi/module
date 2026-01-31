@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Modular Interpretability Pipeline
+Modular Interpretability Pipeline (Enhanced)
+
 Demonstrates using the interpretability_lib components for:
 - Fine-tuning with LoRA
-- Feature attribution (LIME/SHAP)
-- Interpretability metrics
-- Bias detection
+- Multi-method feature attribution (LIME, SHAP, Integrated Gradients, Attention Rollout, Occlusion)
+- Extended faithfulness & stability metrics
+- Bias detection with amplification analysis
+- Before/after attribution shift analysis
 """
 
 import unsloth
@@ -19,8 +21,15 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from datasets import load_dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, matthews_corrcoef
+import torch
 from transformers import set_seed
-from interpretability_lib import LoRAFineTuner, FeatureAttributor, MetricsCalculator, BiasDetector
+from interpretability_lib import (
+    LoRAFineTuner, 
+    FeatureAttributor, 
+    MetricsCalculator, 
+    BiasDetector,
+    AttributionShiftAnalyzer
+)
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -40,7 +49,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", default="unsloth/Llama-3.2-1B-Instruct")
     # Forcing default output-dir to ensure consistent comparison if not specified
-    parser.add_argument("--output-dir", default="outputs/modular_pipeline_fixed")
+    parser.add_argument("--output-dir", default="outputs/modular_pipeline_enhanced")
     parser.add_argument("--train-size", type=int, default=0, help="Number of training samples to use. >0 subsamples, 0 or negative = full dataset")
     parser.add_argument("--eval-sample-size", type=int, default=50)
     parser.add_argument("--epochs", type=float, default=1.0)
@@ -48,6 +57,8 @@ def parse_arguments():
     parser.add_argument("--max-seq-length", type=int, default=512)
     parser.add_argument("--load-in-4bit", action="store_true", default=True)
     parser.add_argument("--run-xai", action="store_true", default=True)
+    parser.add_argument("--extended-xai", action="store_true", default=True, help="Run extended attribution methods (IG, Attention, Occlusion)")
+    parser.add_argument("--run-shift-analysis", action="store_true", default=True, help="Run attribution shift analysis")
     return parser.parse_args()
 
 
@@ -143,20 +154,31 @@ def plot_performance_comparison(final_results, output_dir):
     plt.close()
 
 
-def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size, phase_name=""):
+def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size, phase_name="", 
+                                  extended_methods=True, shift_analyzer=None):
     """Compute comprehensive feature attribution and interpretability metrics."""
     print(f"\nComputing attribution metrics for {phase_name}...")
     
     safe_sample_size = min(sample_size, len(eval_data))
     indices = random.sample(range(len(eval_data)), safe_sample_size)
     sample_texts = [eval_data[i]["sentence"] for i in indices]
+    sample_labels = [eval_data[i]["label"] for i in indices]
     
     predict_fn = attributor.get_predict_proba_fn()
     
+    # Define attribution methods - baseline + extended
     methods = {
         "LIME": lambda t: attributor.explain_lime(t, predict_fn, num_features=5, num_samples=50),
         "SHAP": lambda t: attributor.explain_shap(t, predict_fn, nsamples=40)
     }
+    
+    # Add extended methods if requested
+    if extended_methods:
+        methods.update({
+            "IntegratedGradients": lambda t: attributor.explain_integrated_gradients(t, steps=30),
+            "AttentionRollout": lambda t: attributor.explain_attention_rollout(t),
+            "Occlusion": lambda t: attributor.explain_occlusion(t, predict_fn)
+        })
     
     raw_metrics = {m: {
         "faithfulness": [], "comprehensiveness": [], "sufficiency": [], 
@@ -168,9 +190,14 @@ def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size
     cross_method_agreement = []
     
     loop_limit = min(10, len(sample_texts))
+    
+    # Determine phase for shift analysis
+    phase_key = "pre_finetune" if "zero" in phase_name.lower() else "post_finetune"
+    
     for i, text in tqdm(enumerate(sample_texts[:loop_limit]), total=loop_limit, desc=f"Analyzing {phase_name}"):
         orig_prob = predict_fn([text])[0][1]
         text_words = text.split()
+        sample_id = f"sample_{indices[i]}"
         
         explanations = {}
         for name, explain_fn in methods.items():
@@ -190,6 +217,18 @@ def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size
                 raw_metrics[name][k].append(v)
             
             raw_metrics[name]["time"].append(elapsed)
+            
+            # Store attributions for shift analysis
+            if shift_analyzer is not None:
+                shift_analyzer.store_attributions(
+                    phase=phase_key,
+                    sample_id=sample_id,
+                    text=text,
+                    method=name,
+                    attribution_list=explanation,
+                    prediction_prob=orig_prob,
+                    label=sample_labels[i] if i < len(sample_labels) else None
+                )
             
             # Fidelity (Approximation quality)
             if name == "LIME":
@@ -258,6 +297,17 @@ def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size
 
 def detect_bias(attributor, eval_data, sample_size=100):
     """Analyze potential bias in feature attributions by specifically searching for demographic terms."""
+    bias_results, _ = detect_bias_with_attributions(attributor, eval_data, sample_size)
+    return bias_results
+
+
+def detect_bias_with_attributions(attributor, eval_data, sample_size=100):
+    """
+    Analyze potential bias in feature attributions and return raw attributions.
+    
+    Returns:
+        Tuple of (bias_results dict, list of attributions for shift analysis)
+    """
     print("\nDetecting bias in attributions...")
     
     predict_fn = attributor.get_predict_proba_fn()
@@ -275,7 +325,7 @@ def detect_bias(attributor, eval_data, sample_size=100):
     if not relevant_indices:
         print("  WARNING: No sentences with gendered tokens found in the evaluation set.")
         # Return empty results following the expected structure
-        return bias_detector.analyze_bias([], male_tokens, female_tokens)
+        return bias_detector.analyze_bias([], male_tokens, female_tokens), []
 
     # Take a sample from the relevant sentences
     num_samples = min(20, len(relevant_indices))
@@ -291,7 +341,11 @@ def detect_bias(attributor, eval_data, sample_size=100):
     
     bias_results = bias_detector.analyze_bias(all_attributions, male_tokens, female_tokens)
     
-    return bias_results
+    # Also run multi-group analysis using built-in demographic groups
+    multi_group_results = bias_detector.analyze_multiple_groups(all_attributions)
+    bias_results["multi_group_analysis"] = multi_group_results
+    
+    return bias_results, all_attributions
 
 
 def main():
@@ -338,15 +392,27 @@ def main():
     print(f"Zero-Shot Performance: {zs_perf}")
     final_results["zero_shot_performance"] = zs_perf
     
+    # Initialize shift analyzer for before/after comparison
+    shift_analyzer = None
+    if args.run_shift_analysis and args.finetune:
+        shift_analyzer = AttributionShiftAnalyzer(args.output_dir)
+        print("  Attribution Shift Analyzer initialized for before/after comparison")
+    
+    # Store zero-shot attributions for bias shift analysis
+    zs_attributions = []  # For bias shift report
+    
     # Zero-shot attribution metrics
     if args.run_xai:
-        zs_attrs = compute_attribution_metrics(attributor, metrics_calc, eval_data, args.eval_sample_size, "Zero-Shot")
+        zs_attrs = compute_attribution_metrics(
+            attributor, metrics_calc, eval_data, args.eval_sample_size, "Zero-Shot",
+            extended_methods=args.extended_xai, shift_analyzer=shift_analyzer
+        )
         print(f"Zero-Shot XAI Properties: {zs_attrs}")
         final_results["zero_shot_attributions"] = zs_attrs
         plot_xai_properties(zs_attrs, args.output_dir, "Zero-Shot")
     
-    # Bias detection (zero-shot)
-    zs_bias = detect_bias(attributor, eval_data, sample_size=100)
+    # Bias detection (zero-shot) - collect attributions for shift report
+    zs_bias, zs_attributions = detect_bias_with_attributions(attributor, eval_data, sample_size=100)
     print(f"Zero-Shot Bias Analysis: {zs_bias}")
     final_results["zero_shot_bias"] = zs_bias
     
@@ -371,6 +437,15 @@ def main():
         
         finetuner.train(train_ds, epochs=args.epochs)
         
+        # Free up memory after training
+        import gc
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        # Switch model to inference mode for evaluation
+        print("Enabling inference mode after fine-tuning...")
+        finetuner.enable_inference_mode()
+        
         # Fine-tuned evaluation
         print("\n" + "="*50)
         print("FINE-TUNED EVALUATION")
@@ -387,15 +462,52 @@ def main():
         
         # Fine-tuned attribution metrics
         if args.run_xai:
-            ft_attrs = compute_attribution_metrics(attributor, metrics_calc, eval_data, args.eval_sample_size, "Fine-Tuned")
+            ft_attrs = compute_attribution_metrics(
+                attributor, metrics_calc, eval_data, args.eval_sample_size, "Fine-Tuned",
+                extended_methods=args.extended_xai, shift_analyzer=shift_analyzer
+            )
             print(f"Fine-Tuned XAI Properties: {ft_attrs}")
             final_results["finetuned_attributions"] = ft_attrs
             plot_xai_properties(ft_attrs, args.output_dir, "Fine-Tuned")
         
-        # Bias detection (fine-tuned)
-        ft_bias = detect_bias(attributor, eval_data, sample_size=100)
+        # Bias detection (fine-tuned) - collect attributions for shift report
+        ft_bias, ft_attributions = detect_bias_with_attributions(attributor, eval_data, sample_size=100)
         print(f"Fine-Tuned Bias Analysis: {ft_bias}")
         final_results["finetuned_bias"] = ft_bias
+        
+        # Generate bias shift report
+        if zs_attributions and ft_attributions:
+            print("\n  Computing bias amplification analysis...")
+            bias_detector = BiasDetector()
+            bias_shift_report = bias_detector.generate_bias_shift_report(zs_attributions, ft_attributions)
+            print(f"  Bias Shift Summary: {bias_shift_report.get('summary', {})}")
+            final_results["bias_shift_report"] = bias_shift_report
+        
+        # Generate attribution shift report
+        if shift_analyzer is not None and args.run_shift_analysis:
+            print("\n" + "="*50)
+            print("ATTRIBUTION SHIFT ANALYSIS")
+            print("="*50)
+            
+            shift_report = shift_analyzer.generate_shift_report()
+            print(f"Attribution Shift Analysis generated for {shift_report.get('num_samples', 0)} samples")
+            
+            if shift_report.get("method_reports"):
+                for method, method_report in shift_report["method_reports"].items():
+                    print(f"\n  {method}:")
+                    print(f"    Rank Correlation: {method_report.get('rank_correlation_mean', 'N/A'):.3f}" 
+                          if isinstance(method_report.get('rank_correlation_mean'), (int, float)) else f"    Rank Correlation: N/A")
+                    print(f"    Top-3 Overlap: {method_report.get('top_3_overlap_mean', 'N/A'):.3f}"
+                          if isinstance(method_report.get('top_3_overlap_mean'), (int, float)) else f"    Top-3 Overlap: N/A")
+            
+            final_results["attribution_shift_report"] = shift_report
+            
+            # Save attribution data (HDF5 or JSON)
+            try:
+                shift_analyzer.save_to_hdf5("attribution_shifts.h5")
+            except Exception as e:
+                print(f"  Note: Could not save to HDF5 ({e}), falling back to JSON")
+                shift_analyzer.save_to_json("attribution_shifts.json")
     
     # Save results
     print("\n" + "="*50)

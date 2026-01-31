@@ -108,6 +108,289 @@ class FeatureAttributor:
             
         return list(zip(words, vals.flatten()))
 
+    def explain_integrated_gradients(self, text, steps=50, target_class=1):
+        """
+        Computes Integrated Gradients attribution for text classification.
+        
+        Integrated Gradients (Sundararajan et al., ICML 2017) computes attributions
+        by integrating gradients along a path from a baseline (padding tokens) to
+        the actual input.
+        
+        Args:
+            text: Input text to explain
+            steps: Number of integration steps (higher = more accurate)
+            target_class: Class index to explain (0=negative, 1=positive)
+            
+        Returns:
+            List of (token, attribution_score) tuples
+        """
+        def format_prompt(t):
+            return f"Classify the sentiment as 0 (negative) or 1 (positive).\nText: {t}\nSentiment:"
+        
+        prompt = format_prompt(text)
+        
+        # Tokenize input
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
+        input_ids = inputs["input_ids"].to(self.model.device)
+        attention_mask = inputs["attention_mask"].to(self.model.device)
+        
+        # Get embedding layer
+        try:
+            embed_layer = self.model.get_input_embeddings()
+        except AttributeError:
+            if hasattr(self.model, 'model'):
+                embed_layer = self.model.model.embed_tokens
+            elif hasattr(self.model, 'transformer'):
+                embed_layer = self.model.transformer.wte
+            else:
+                raise AttributeError("Could not find embedding layer in model")
+        
+        # Get actual embeddings
+        input_embeds = embed_layer(input_ids)
+        
+        # Create baseline (pad token embeddings)
+        baseline_ids = torch.full_like(input_ids, self.tokenizer.pad_token_id or 0)
+        baseline_embeds = embed_layer(baseline_ids)
+        
+        # Compute integrated gradients
+        scaled_inputs = []
+        for alpha in np.linspace(0, 1, steps):
+            scaled = baseline_embeds + alpha * (input_embeds - baseline_embeds)
+            scaled_inputs.append(scaled)
+        
+        # Stack all scaled inputs
+        all_embeds = torch.cat(scaled_inputs, dim=0)
+        all_attention = attention_mask.repeat(steps, 1)
+        
+        # Forward pass with gradients
+        all_embeds.requires_grad_(True)
+    
+        # Store original state
+        original_use_cache = getattr(self.model.config, "use_cache", True)
+        self.model.config.use_cache = False
+    
+        try:
+            outputs = self.model(inputs_embeds=all_embeds, attention_mask=all_attention)
+            logits = outputs.logits[:, -1, :]
+            
+            # Get logits for target class
+            target_token = self.token_1 if target_class == 1 else self.token_0
+            target_logits = logits[:, target_token]
+            
+            # Backward pass
+            target_logits.sum().backward()
+            
+            # Get gradients
+            gradients = all_embeds.grad  # (steps, seq_len, embed_dim)
+            
+            if gradients is not None:
+                # Average gradients across steps
+                avg_gradients = gradients.mean(dim=0)  # (seq_len, embed_dim)
+                
+                # Compute attributions: (input - baseline) * avg_gradients
+                diff = (input_embeds - baseline_embeds).squeeze(0)  # (seq_len, embed_dim)
+                attributions = (diff * avg_gradients).sum(dim=-1)  # (seq_len,)
+                attributions = attributions.detach().cpu().numpy()
+                
+                # Handle numerical instability (NaNs/Infs)
+                if np.isnan(attributions).any() or np.isinf(attributions).any():
+                    attributions = np.nan_to_num(attributions, nan=0.0, posinf=0.0, neginf=0.0)
+            else:
+                attributions = np.zeros(input_ids.shape[1])
+            
+        except Exception as e:
+            # Fallback: return zeros if IG fails
+            print(f"  WARNING: Integrated Gradients failed: {e}")
+            attributions = np.zeros(input_ids.shape[1])
+        finally:
+            # Restore state
+            self.model.config.use_cache = original_use_cache
+        
+        # Map back to tokens
+        tokens = self.tokenizer.convert_ids_to_tokens(input_ids[0].cpu().numpy())
+        
+        # Aggregate to words
+        word_attributions = self._aggregate_bpe_to_words(text, tokens, attributions)
+        
+        return word_attributions
+
+    def explain_attention_rollout(self, text, target_layer=-1):
+        """
+        Computes Attention Rollout attribution (Abnar & Zuidema, ACL 2020).
+        
+        Attention Rollout aggregates attention weights across layers by multiplying
+        attention matrices, providing a flow-based view of information propagation.
+        
+        Args:
+            text: Input text to explain
+            target_layer: Which layer to use (-1 = aggregate all layers)
+            
+        Returns:
+            List of (token, attention_score) tuples
+        """
+        def format_prompt(t):
+            return f"Classify the sentiment as 0 (negative) or 1 (positive).\nText: {t}\nSentiment:"
+        
+        prompt = format_prompt(text)
+        
+        # Tokenize input
+        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        
+        # Get attention weights
+        try:
+            with torch.no_grad():
+                outputs = self.model(**inputs, output_attentions=True)
+                attentions = outputs.attentions  # Tuple of (batch, heads, seq, seq)
+        except (AssertionError, AttributeError, RuntimeError) as e:
+            # Unsloth fast kernels (Flash Attention 2 / Xformers) often forbid output_attentions=True
+            # because the internal attention matrix is never explicitly materialised.
+            msg = str(e) or "AssertionError (Fast Kernels)"
+            print(f"  WARNING: Attention Rollout skipped. Reason: Model uses optimized Unsloth kernels that do not support 'output_attentions=True'.")
+            print(f"  NOTE: Use gradient-based (IG) or perturbation-based (SHAP/Occlusion) methods instead for this model.")
+            return [(word, 0.0) for word in text.split()]
+        
+        if not attentions:
+            # Model doesn't output attentions, return empty
+            return [(word, 0.0) for word in text.split()]
+        
+        # Stack attention tensors: (num_layers, batch, heads, seq, seq)
+        attention_stack = torch.stack(attentions, dim=0)
+        
+        # Average across heads: (num_layers, batch, seq, seq)
+        attention_heads_avg = attention_stack.mean(dim=2)
+        
+        # Remove batch dim (assuming batch=1): (num_layers, seq, seq)
+        attention_heads_avg = attention_heads_avg.squeeze(1)
+        
+        # Attention Rollout: multiply attention matrices with residual connections
+        # Add identity matrix for residual connection and renormalize
+        num_layers = attention_heads_avg.shape[0]
+        seq_len = attention_heads_avg.shape[1]
+        
+        try:
+            rollout = torch.eye(seq_len, device=self.model.device)
+            
+            for layer_idx in range(num_layers):
+                attn = attention_heads_avg[layer_idx]
+                # Add residual connection (identity)
+                attn_with_residual = (attn + torch.eye(seq_len, device=self.model.device)) / 2
+                rollout = torch.matmul(rollout, attn_with_residual)
+            
+            # Get attention to last token (the prediction token)
+            last_token_attention = rollout[-1, :].cpu().numpy()
+            
+            # Map back to tokens
+            tokens = self.tokenizer.convert_ids_to_tokens(inputs["input_ids"][0].cpu().numpy())
+            
+            # Aggregate to words
+            word_attributions = self._aggregate_bpe_to_words(text, tokens, last_token_attention)
+            
+            return word_attributions
+        except Exception as e:
+            print(f"  WARNING: Error during attention matrix computation: {e}")
+            return [(word, 0.0) for word in text.split()]
+
+    def explain_occlusion(self, text, predict_fn, mask_token="[UNK]"):
+        """
+        Computes Occlusion Sensitivity attribution.
+        
+        For each word, masks it out and measures the change in prediction.
+        Words whose removal causes larger prediction drops are more important.
+        
+        Args:
+            text: Input text to explain
+            predict_fn: Prediction function
+            mask_token: Token to use for masking
+            
+        Returns:
+            List of (word, importance_score) tuples
+        """
+        words = text.split()
+        if not words:
+            return []
+        
+        # Get original prediction
+        original_prob = predict_fn([text])[0][1]
+        
+        attributions = []
+        for i, word in enumerate(words):
+            # Create masked text
+            masked_words = words.copy()
+            masked_words[i] = mask_token
+            masked_text = " ".join(masked_words)
+            
+            # Get prediction for masked text
+            try:
+                masked_prob = predict_fn([masked_text])[0][1]
+                # Attribution = drop in probability (higher = more important)
+                attribution = original_prob - masked_prob
+            except:
+                attribution = 0.0
+            
+            attributions.append((word, float(attribution)))
+        
+        return attributions
+
+    def _aggregate_bpe_to_words(self, original_text, tokens, attributions):
+        """
+        Aggregates BPE/subword token attributions to word-level.
+        
+        Args:
+            original_text: The original text (space-separated words)
+            tokens: List of tokens from tokenizer
+            attributions: Array of attribution scores per token
+            
+        Returns:
+            List of (word, aggregated_attribution) tuples
+        """
+        words = original_text.split()
+        
+        # Simple heuristic: reconstruct text from tokens and map to words
+        word_attributions = []
+        
+        # Find tokens that correspond to words in the original text
+        # This handles BPE by looking for tokens that match word prefixes
+        
+        current_word_idx = 0
+        current_attribution = 0.0
+        token_count = 0
+        
+        for i, token in enumerate(tokens):
+            if i >= len(attributions):
+                break
+                
+            # Clean token (remove BPE markers like Ġ, ##, etc.)
+            clean_token = token.replace("Ġ", "").replace("▁", "").replace("##", "").strip()
+            
+            if not clean_token or clean_token in ["<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[PAD]"]:
+                continue
+            
+            # Check if this starts a new word (has space prefix in Llama-style tokenizers)
+            is_word_start = token.startswith("Ġ") or token.startswith("▁") or i == 0
+            
+            if is_word_start and token_count > 0 and current_word_idx < len(words):
+                # Save previous word
+                word_attributions.append((words[current_word_idx], current_attribution / max(1, token_count)))
+                current_word_idx += 1
+                current_attribution = 0.0
+                token_count = 0
+            
+            current_attribution += attributions[i]
+            token_count += 1
+        
+        # Save last word
+        if token_count > 0 and current_word_idx < len(words):
+            word_attributions.append((words[current_word_idx], current_attribution / max(1, token_count)))
+        
+        # Fill in any missing words with zero attribution
+        covered_words = {w for w, _ in word_attributions}
+        for word in words:
+            if word not in covered_words:
+                word_attributions.append((word, 0.0))
+        
+        return word_attributions
+
     def get_top_features(self, explanation, top_k=3):
         """Helper to get top K features by absolute attribution score."""
         sorted_features = sorted(explanation, key=lambda x: abs(x[1]), reverse=True)
@@ -123,3 +406,45 @@ class FeatureAttributor:
         # For now, we return as is or implement a simple heuristic.
         return atom_attributions
 
+    def get_available_methods(self):
+        """Returns a list of available attribution methods."""
+        return ["LIME", "SHAP", "IntegratedGradients", "AttentionRollout", "Occlusion"]
+
+    def explain(self, text, method, predict_fn=None, **kwargs):
+        """
+        Unified interface to compute attributions using any available method.
+        
+        Args:
+            text: Input text to explain
+            method: Attribution method name
+            predict_fn: Prediction function (required for LIME, SHAP, Occlusion)
+            **kwargs: Method-specific parameters
+            
+        Returns:
+            List of (word, attribution_score) tuples
+        """
+        method = method.lower()
+        
+        if method == "lime":
+            if predict_fn is None:
+                predict_fn = self.get_predict_proba_fn()
+            return self.explain_lime(text, predict_fn, **kwargs)
+        
+        elif method == "shap":
+            if predict_fn is None:
+                predict_fn = self.get_predict_proba_fn()
+            return self.explain_shap(text, predict_fn, **kwargs)
+        
+        elif method in ["integratedgradients", "ig", "integrated_gradients"]:
+            return self.explain_integrated_gradients(text, **kwargs)
+        
+        elif method in ["attentionrollout", "attention_rollout", "attention"]:
+            return self.explain_attention_rollout(text, **kwargs)
+        
+        elif method == "occlusion":
+            if predict_fn is None:
+                predict_fn = self.get_predict_proba_fn()
+            return self.explain_occlusion(text, predict_fn, **kwargs)
+        
+        else:
+            raise ValueError(f"Unknown method: {method}. Available: {self.get_available_methods()}")
