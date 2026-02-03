@@ -78,19 +78,31 @@ class LoRAFineTuner:
             full_text = prompt + f" {label}"
             
             # Tokenize both
+            # Use fixed padding and max_length for consistency across the batch
             prompt_tokens = self.tokenizer(prompt, add_special_tokens=True)
-            full_tokens = self.tokenizer(full_text, add_special_tokens=True, truncation=True, max_length=self.max_seq_length)
+            full_tokens = self.tokenizer(
+                full_text, 
+                add_special_tokens=True, 
+                truncation=True, 
+                max_length=self.max_seq_length,
+                padding="max_length"
+            )
             
             input_ids = full_tokens["input_ids"]
             attention_mask = full_tokens["attention_mask"]
             
-            # Create labels with prompt masked to -100
+            # Create labels with prompt AND padding masked to -100
             labels_masked = list(input_ids) # Copy
             prompt_length = len(prompt_tokens["input_ids"])
             
-            # Mask the prompt tokens (set to -100 so they're ignored in loss)
+            # Mask the prompt tokens
             for i in range(min(prompt_length, len(labels_masked))):
                 labels_masked[i] = -100
+                
+            # Mask the padding tokens (where attention_mask is 0)
+            for i in range(len(attention_mask)):
+                if attention_mask[i] == 0:
+                    labels_masked[i] = -100
             
             input_ids_list.append(input_ids)
             attention_mask_list.append(attention_mask)
@@ -114,14 +126,14 @@ class LoRAFineTuner:
         
         formatted_dataset = train_dataset.map(self._tokenize_with_masking, batched=True, remove_columns=train_dataset.column_names)
         
-        trainer = SFTTrainer(
+        from transformers import Trainer, TrainingArguments
+        
+        trainer = Trainer(
             model=self.model,
             tokenizer=self.tokenizer,
             train_dataset=formatted_dataset,
-            dataset_num_proc=2,
-            packing=False,
             data_collator=DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False),
-            args=SFTConfig(
+            args=TrainingArguments(
                 output_dir=f"{self.output_dir}/checkpoints",
                 num_train_epochs=epochs,
                 per_device_train_batch_size=batch_size,
@@ -136,7 +148,6 @@ class LoRAFineTuner:
                 lr_scheduler_type="linear",
                 seed=42,
                 save_strategy="no",
-                max_seq_length=self.max_seq_length,
             ),
         )
         

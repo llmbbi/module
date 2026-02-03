@@ -164,6 +164,7 @@ class FeatureAttributor:
         
         # Forward pass with gradients
         all_embeds.requires_grad_(True)
+        all_embeds.retain_grad()
     
         # Store original state
         original_use_cache = getattr(self.model.config, "use_cache", True)
@@ -171,7 +172,8 @@ class FeatureAttributor:
     
         try:
             outputs = self.model(inputs_embeds=all_embeds, attention_mask=all_attention)
-            logits = outputs.logits[:, -1, :]
+            # Explicitly cast to float32 to avoid ScalarType BFloat16 errors during backward pass
+            logits = outputs.logits[:, -1, :].float()
             
             # Get logits for target class
             target_token = self.token_1 if target_class == 1 else self.token_0
@@ -214,82 +216,6 @@ class FeatureAttributor:
         
         return word_attributions
 
-    def explain_attention_rollout(self, text, target_layer=-1):
-        """
-        Computes Attention Rollout attribution (Abnar & Zuidema, ACL 2020).
-        
-        Attention Rollout aggregates attention weights across layers by multiplying
-        attention matrices, providing a flow-based view of information propagation.
-        
-        Args:
-            text: Input text to explain
-            target_layer: Which layer to use (-1 = aggregate all layers)
-            
-        Returns:
-            List of (token, attention_score) tuples
-        """
-        def format_prompt(t):
-            return f"Classify the sentiment as 0 (negative) or 1 (positive).\nText: {t}\nSentiment:"
-        
-        prompt = format_prompt(text)
-        
-        # Tokenize input
-        inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=256)
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        
-        # Get attention weights
-        try:
-            with torch.no_grad():
-                outputs = self.model(**inputs, output_attentions=True)
-                attentions = outputs.attentions  # Tuple of (batch, heads, seq, seq)
-        except (AssertionError, AttributeError, RuntimeError) as e:
-            # Unsloth fast kernels (Flash Attention 2 / Xformers) often forbid output_attentions=True
-            # because the internal attention matrix is never explicitly materialised.
-            msg = str(e) or "AssertionError (Fast Kernels)"
-            print(f"  WARNING: Attention Rollout skipped. Reason: Model uses optimized Unsloth kernels that do not support 'output_attentions=True'.")
-            print(f"  NOTE: Use gradient-based (IG) or perturbation-based (SHAP/Occlusion) methods instead for this model.")
-            return [(word, 0.0) for word in text.split()]
-        
-        if not attentions:
-            # Model doesn't output attentions, return empty
-            return [(word, 0.0) for word in text.split()]
-        
-        # Stack attention tensors: (num_layers, batch, heads, seq, seq)
-        attention_stack = torch.stack(attentions, dim=0)
-        
-        # Average across heads: (num_layers, batch, seq, seq)
-        attention_heads_avg = attention_stack.mean(dim=2)
-        
-        # Remove batch dim (assuming batch=1): (num_layers, seq, seq)
-        attention_heads_avg = attention_heads_avg.squeeze(1)
-        
-        # Attention Rollout: multiply attention matrices with residual connections
-        # Add identity matrix for residual connection and renormalize
-        num_layers = attention_heads_avg.shape[0]
-        seq_len = attention_heads_avg.shape[1]
-        
-        try:
-            rollout = torch.eye(seq_len, device=self.model.device)
-            
-            for layer_idx in range(num_layers):
-                attn = attention_heads_avg[layer_idx]
-                # Add residual connection (identity)
-                attn_with_residual = (attn + torch.eye(seq_len, device=self.model.device)) / 2
-                rollout = torch.matmul(rollout, attn_with_residual)
-            
-            # Get attention to last token (the prediction token)
-            last_token_attention = rollout[-1, :].cpu().numpy()
-            
-            # Map back to tokens
-            tokens = self.tokenizer.convert_ids_to_tokens(inputs["input_ids"][0].cpu().numpy())
-            
-            # Aggregate to words
-            word_attributions = self._aggregate_bpe_to_words(text, tokens, last_token_attention)
-            
-            return word_attributions
-        except Exception as e:
-            print(f"  WARNING: Error during attention matrix computation: {e}")
-            return [(word, 0.0) for word in text.split()]
 
     def explain_occlusion(self, text, predict_fn, mask_token="[UNK]"):
         """
@@ -361,13 +287,13 @@ class FeatureAttributor:
                 break
                 
             # Clean token (remove BPE markers like Ġ, ##, etc.)
-            clean_token = token.replace("Ġ", "").replace("▁", "").replace("##", "").strip()
+            clean_token = token.replace("Ġ", "").replace("▁", "").replace(" ", "").replace("##", "").strip()
             
-            if not clean_token or clean_token in ["<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[PAD]"]:
+            if not clean_token or clean_token in ["<s>", "</s>", "<pad>", "[CLS]", "[SEP]", "[PAD]", "<|endoftext|>", "<|file_separator|>", "<|extra_0|>"]:
                 continue
             
-            # Check if this starts a new word (has space prefix in Llama-style tokenizers)
-            is_word_start = token.startswith("Ġ") or token.startswith("▁") or i == 0
+            # Check if this starts a new word (has space prefix in Llama/Gemma style tokenizers)
+            is_word_start = token.startswith("Ġ") or token.startswith("▁") or token.startswith(" ") or i == 0
             
             if is_word_start and token_count > 0 and current_word_idx < len(words):
                 # Save previous word
@@ -408,7 +334,7 @@ class FeatureAttributor:
 
     def get_available_methods(self):
         """Returns a list of available attribution methods."""
-        return ["LIME", "SHAP", "IntegratedGradients", "AttentionRollout", "Occlusion"]
+        return ["LIME", "SHAP", "IntegratedGradients", "Occlusion"]
 
     def explain(self, text, method, predict_fn=None, **kwargs):
         """
@@ -438,8 +364,6 @@ class FeatureAttributor:
         elif method in ["integratedgradients", "ig", "integrated_gradients"]:
             return self.explain_integrated_gradients(text, **kwargs)
         
-        elif method in ["attentionrollout", "attention_rollout", "attention"]:
-            return self.explain_attention_rollout(text, **kwargs)
         
         elif method == "occlusion":
             if predict_fn is None:

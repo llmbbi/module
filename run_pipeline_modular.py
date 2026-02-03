@@ -47,7 +47,7 @@ class NumpyEncoder(json.JSONEncoder):
 
 def parse_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", default="unsloth/Llama-3.2-1B-Instruct")
+    parser.add_argument("--model-name", default="unsloth/Llama-3.2-1B")
     # Forcing default output-dir to ensure consistent comparison if not specified
     parser.add_argument("--output-dir", default="outputs/modular_pipeline_enhanced")
     parser.add_argument("--train-size", type=int, default=0, help="Number of training samples to use. >0 subsamples, 0 or negative = full dataset")
@@ -176,7 +176,6 @@ def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size
     if extended_methods:
         methods.update({
             "IntegratedGradients": lambda t: attributor.explain_integrated_gradients(t, steps=30),
-            "AttentionRollout": lambda t: attributor.explain_attention_rollout(t),
             "Occlusion": lambda t: attributor.explain_occlusion(t, predict_fn)
         })
     
