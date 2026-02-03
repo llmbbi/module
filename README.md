@@ -28,13 +28,35 @@ This implementation references three major approaches for model explanation:
   
 - **IG Occlusion**: Hybrid—uses IG attribution map to guide occlusion mask placement, computing faithfulness via masked logit importance (steps=5, baseline='zeros'). 
   
-- **Attention Rollout**: Layer-wise attention propagation (via matrix mult) for holistic token relevance. Robust for multi-hop reasoning.
-
 For classification evaluation, we complement accuracy-based metrics with the **Matthews Correlation Coefficient (MCC)**, which provides a balanced score (−1 to +1) that remains informative under class imbalance. An MCC of +1 indicates perfect predictions, 0 matches random guessing, and −1 reflects complete disagreement.
 
+Multi-Family Experiments
+The multi-family setup is intended for sweeping interpretability and bias analyses over multiple models and datasets in a single run. It reuses the modular pipeline while varying configuration via shell and SLURM wrappers.
+​
+Entry points
+run_multi_families.sh: Local launcher for running multiple model families and configurations in sequence (e.g., different --model-name, dataset splits, or XAI settings).
+​
+run_multi_families.sbatch: SLURM submission script that mirrors the shell launcher but targets the ICE/PACE GPUs for large-scale sweeps.
 
-Methodology: Computed vs. Static Properties
-The evaluation of XAI properties (F1–F11) in llama_3.2_1B_xai_2.py and llama_3.2_1B_roar.py utilizes a hybrid approach. While properties dependent on the data distribution are calculated at runtime, properties inherent to the algorithmic design of LIME/SHAP or those requiring prohibitive computational resources are assigned static values based on established literature.
+run_pipeline_modular.py: Core Python entry point; each job invoked by the multi-family scripts wraps this script with different flags.
+
+# Local multi-family sweep (example)
+```bash
+bash run_multi_families.sh
+```
+
+Each sub-run calls:
+```bash
+python run_pipeline_modular.py \
+  --model-name <MODEL_NAME> \
+  --output-dir outputs/<EXPERIMENT_TAG> \
+  --train-size <N_TRAIN> \
+  --eval-sample-size <N_EVAL> \
+  --epochs 1.0 \
+  --finetune \
+  --load-in-4bit \
+  --run-xai
+```
 
 Dynamically Computed Properties
 
