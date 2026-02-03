@@ -30,7 +30,7 @@ This implementation references three major approaches for model explanation:
   
 For classification evaluation, we complement accuracy-based metrics with the **Matthews Correlation Coefficient (MCC)**, which provides a balanced score (−1 to +1) that remains informative under class imbalance. An MCC of +1 indicates perfect predictions, 0 matches random guessing, and −1 reflects complete disagreement.
 
-Multi-Family Experiments
+## Multi-Family Experiments
 The multi-family setup is intended for sweeping interpretability and bias analyses over multiple models and datasets in a single run. It reuses the modular pipeline while varying configuration via shell and SLURM wrappers.
 ​
 Entry points
@@ -40,7 +40,6 @@ run_multi_families.sbatch: SLURM submission script that mirrors the shell launch
 
 run_pipeline_modular.py: Core Python entry point; each job invoked by the multi-family scripts wraps this script with different flags.
 
-# Local multi-family sweep (example)
 ```bash
 bash run_multi_families.sh
 ```
