@@ -155,6 +155,11 @@ class LoRAFineTuner:
         trainer.train()
         print("Training complete.")
         
+        # Save adapters
+        save_path = os.path.join(self.output_dir, "lora_adapters")
+        print(f"Saving fine-tuned adapters to {save_path}...")
+        self.save_adapters(save_path)
+        
         # Switch to inference mode
         FastLanguageModel.for_inference(self.model)
         

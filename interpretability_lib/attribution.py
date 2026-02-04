@@ -8,16 +8,34 @@ class FeatureAttributor:
     def __init__(self, model, tokenizer):
         self.model = model
         self.tokenizer = tokenizer
-        # Match training/eval prompt which uses a space before the label
-        # Use the digit token id following a space; take the last id
-        self.token_0 = self.tokenizer(" 0", add_special_tokens=False)["input_ids"][-1]
-        self.token_1 = self.tokenizer(" 1", add_special_tokens=False)["input_ids"][-1]
+        # Detect if tokenizer splits " 0" into multiple tokens (e.g. Qwen, DeepSeek)
+        # Qwen/DeepSeek: " 0" -> [220, 15] (Space, 0)
+        # Llama: " 0" -> [1234] (Space+0 combined)
+        t0_encoded = self.tokenizer(" 0", add_special_tokens=False)["input_ids"]
+        t1_encoded = self.tokenizer(" 1", add_special_tokens=False)["input_ids"]
+        
+        self.split_space_digit = False
+        if len(t0_encoded) > 1:
+            self.split_space_digit = True
+            # If split, we will append a space to the prompt manually, so we expect the "0" token (without space)
+            # Use the "0" token ID (the last one)
+            self.token_0 = t0_encoded[-1]
+            self.token_1 = t1_encoded[-1]
+        else:
+            # If fused, we expect the single " 0" token
+            self.token_0 = t0_encoded[-1]
+            self.token_1 = t1_encoded[-1]
         
     def get_predict_proba_fn(self, temperature=0.0, batch_size=16):
         """Returns a prediction function compatible with LIME/SHAP."""
         
         def format_prompt(text):
-            return f"Classify the sentiment as 0 (negative) or 1 (positive).\nText: {text}\nSentiment:"
+            prompt = f"Classify the sentiment as 0 (negative) or 1 (positive).\nText: {text}\nSentiment:"
+            # If tokenizer splits space+digit, we must add the space to the prompt 
+            # so the model predicts the digit "0"/"1" directly.
+            if self.split_space_digit:
+                prompt += " "
+            return prompt
 
         def predict_proba(texts):
             if isinstance(texts, np.ndarray): 
@@ -171,26 +189,31 @@ class FeatureAttributor:
         self.model.config.use_cache = False
     
         try:
+            # Explicitly use float32 for Integrated Gradients to avoid BFloat16 backward pass errors
+            # and to maintain numerical precision during integration
             outputs = self.model(inputs_embeds=all_embeds, attention_mask=all_attention)
-            # Explicitly cast to float32 to avoid ScalarType BFloat16 errors during backward pass
             logits = outputs.logits[:, -1, :].float()
             
             # Get logits for target class
             target_token = self.token_1 if target_class == 1 else self.token_0
             target_logits = logits[:, target_token]
             
-            # Backward pass
+            # Backward pass on float32 targets
             target_logits.sum().backward()
             
-            # Get gradients
+            # Get gradients and ensure they are in float32
             gradients = all_embeds.grad  # (steps, seq_len, embed_dim)
             
             if gradients is not None:
                 # Average gradients across steps
-                avg_gradients = gradients.mean(dim=0)  # (seq_len, embed_dim)
+                avg_gradients = gradients.mean(dim=0).float()  # (seq_len, embed_dim)
                 
                 # Compute attributions: (input - baseline) * avg_gradients
-                diff = (input_embeds - baseline_embeds).squeeze(0)  # (seq_len, embed_dim)
+                # Ensure all components are in float32
+                input_embeds_f = input_embeds.detach().float()
+                baseline_embeds_f = baseline_embeds.detach().float()
+                diff = (input_embeds_f - baseline_embeds_f).squeeze(0)  # (seq_len, embed_dim)
+                
                 attributions = (diff * avg_gradients).sum(dim=-1)  # (seq_len,)
                 attributions = attributions.detach().cpu().numpy()
                 

@@ -11,6 +11,10 @@ Demonstrates using the interpretability_lib components for:
 """
 
 import unsloth
+import warnings
+# Suppress sklearn ConvergenceWarning from LIME/Lasso
+from sklearn.exceptions import ConvergenceWarning
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
 import argparse
 import json
 import os
@@ -59,6 +63,8 @@ def parse_arguments():
     parser.add_argument("--run-xai", action="store_true", default=True)
     parser.add_argument("--extended-xai", action="store_true", default=True, help="Run extended attribution methods (IG, Attention, Occlusion)")
     parser.add_argument("--run-shift-analysis", action="store_true", default=True, help="Run attribution shift analysis")
+    parser.add_argument("--bias-sample-size", type=int, default=100, help="Maximum samples to use for bias analysis")
+    parser.add_argument("--load-adapter", type=str, default=None, help="Path to existing LoRA adapter to load for fine-tuned evaluation")
     return parser.parse_args()
 
 
@@ -296,7 +302,7 @@ def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size
 
 def detect_bias(attributor, eval_data, sample_size=100):
     """Analyze potential bias in feature attributions by specifically searching for demographic terms."""
-    bias_results, _ = detect_bias_with_attributions(attributor, eval_data, sample_size)
+    bias_results, _, _ = detect_bias_with_attributions(attributor, eval_data, sample_size)
     return bias_results
 
 
@@ -305,50 +311,58 @@ def detect_bias_with_attributions(attributor, eval_data, sample_size=100):
     Analyze potential bias in feature attributions and return raw attributions.
     
     Returns:
-        Tuple of (bias_results dict, list of attributions for shift analysis)
+        Tuple of (bias_results dict, list of attributions for shift analysis, list of raw texts)
     """
-    print("\nDetecting bias in attributions...")
+    print(f"\nDetecting bias in attributions (sample size limit: {sample_size})...")
     
     predict_fn = attributor.get_predict_proba_fn()
     bias_detector = BiasDetector()
     
-    # Define demographic token sets
-    male_tokens = ["he", "him", "his", "man", "male", "boy"]
-    female_tokens = ["she", "her", "hers", "woman", "female", "girl"]
-    all_target = male_tokens + female_tokens
+    all_demographic_tokens = []
+    for dimension in bias_detector.demographic_groups.values():
+        for group_tokens in dimension.values():
+            all_demographic_tokens.extend(group_tokens)
     
-    # Filter for relevant sentences first to ensure we have something to measure
+    # Filter for relevant sentences first
     relevant_indices = [i for i, item in enumerate(eval_data) 
-                        if any(t in item["sentence"].lower().split() for t in all_target)]
+                        if any(t in item["sentence"].lower().split() for t in all_demographic_tokens)]
     
     if not relevant_indices:
-        print("  WARNING: No sentences with gendered tokens found in the evaluation set.")
-        # Return empty results following the expected structure
-        return bias_detector.analyze_bias([], male_tokens, female_tokens), []
+        print("  WARNING: No sentences with demographic tokens found in the evaluation set.")
+        # Return empty results following the structure
+        return bias_detector.analyze_multiple_groups([]), [], []
 
     # Take a sample from the relevant sentences
-    num_samples = min(20, len(relevant_indices))
-    selected_indices = random.sample(relevant_indices, num_samples)
+    actual_sample_size = min(sample_size, len(relevant_indices))
+    selected_indices = random.sample(relevant_indices, actual_sample_size)
     sample_texts = [eval_data[i]["sentence"] for i in selected_indices]
     
     all_attributions = []
     print(f"  Analyzing {len(sample_texts)} sentences containing demographic terms...")
     for text in tqdm(sample_texts, desc="Bias Analysis"):
-        # Increase num_features to 50 to ensure we capture the demographic terms if they are relevant
         lime_exp = attributor.explain_lime(text, predict_fn, num_features=50, num_samples=50)
         all_attributions.append(lime_exp)
     
-    bias_results = bias_detector.analyze_bias(all_attributions, male_tokens, female_tokens)
+    # Run multi-group analysis
+    bias_results = bias_detector.analyze_multiple_groups(all_attributions)
     
-    # Also run multi-group analysis using built-in demographic groups
-    multi_group_results = bias_detector.analyze_multiple_groups(all_attributions)
-    bias_results["multi_group_analysis"] = multi_group_results
+    # Add WAT scores
+    for dimension, groups in bias_detector.demographic_groups.items():
+        if dimension in bias_results:
+            for group_name, tokens in groups.items():
+                wat_res = bias_detector.compute_wat_score(all_attributions, tokens)
+                bias_results[dimension][f"wat_{group_name}"] = wat_res
     
-    return bias_results, all_attributions
+    return bias_results, all_attributions, sample_texts
 
 
 def main():
     args = parse_arguments()
+    
+    # If loading adapter, disable finetuning to prevent conflict
+    if args.load_adapter:
+        args.finetune = False
+        
     os.makedirs(args.output_dir, exist_ok=True)
     set_seed(42)
     
@@ -411,39 +425,58 @@ def main():
         plot_xai_properties(zs_attrs, args.output_dir, "Zero-Shot")
     
     # Bias detection (zero-shot) - collect attributions for shift report
-    zs_bias, zs_attributions = detect_bias_with_attributions(attributor, eval_data, sample_size=100)
+    zs_bias, zs_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
     print(f"Zero-Shot Bias Analysis: {zs_bias}")
     final_results["zero_shot_bias"] = zs_bias
     
-    # Fine-tuning
-    if args.finetune:
+    # Fine-tuning or Loading Adapter
+    if args.finetune or args.load_adapter:
         print("\n" + "="*50)
-        print("FINE-TUNING")
+        print("FINE-TUNING / ADAPTER EVALUATION")
         print("="*50)
         
-        # Configure LoRA adapters for training (switches model to training mode)
-        print("Configuring LoRA adapters...")
-        finetuner.configure_lora()
+        if args.finetune:
+            # Configure LoRA adapters for training (switches model to training mode)
+            print("Configuring LoRA adapters...")
+            finetuner.configure_lora()
+            
+            full_train_ds = dataset["train"].shuffle(seed=42)
+            total_train = len(full_train_ds)
+            if args.train_size > 0 and args.train_size < total_train:
+                print(f"Subsampling training data to {args.train_size} of {total_train} samples...")
+                train_ds = full_train_ds.select(range(args.train_size))
+            else:
+                print(f"Using FULL training dataset ({total_train} samples).")
+                train_ds = full_train_ds
+            
+            finetuner.train(train_ds, epochs=args.epochs)
+            
+            # Free up memory after training
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            
+            # Switch model to inference mode for evaluation
+            print("Enabling inference mode after fine-tuning...")
+            finetuner.enable_inference_mode()
         
-        full_train_ds = dataset["train"].shuffle(seed=42)
-        total_train = len(full_train_ds)
-        if args.train_size > 0 and args.train_size < total_train:
-            print(f"Subsampling training data to {args.train_size} of {total_train} samples...")
-            train_ds = full_train_ds.select(range(args.train_size))
-        else:
-            print(f"Using FULL training dataset ({total_train} samples).")
-            train_ds = full_train_ds
-        
-        finetuner.train(train_ds, epochs=args.epochs)
-        
-        # Free up memory after training
-        import gc
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        # Switch model to inference mode for evaluation
-        print("Enabling inference mode after fine-tuning...")
-        finetuner.enable_inference_mode()
+        elif args.load_adapter:
+            print(f"Loading existing adapter from: {args.load_adapter}")
+            # Free up memory to reload logic cleanliness
+            del finetuner.model
+            del finetuner.tokenizer
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
+            
+            # Re-initialize to load adapter
+            finetuner = LoRAFineTuner(
+                model_name=args.load_adapter,
+                output_dir=args.output_dir,
+                max_seq_length=args.max_seq_length
+            )
+            finetuner.load_model(load_in_4bit=args.load_in_4bit)
+            finetuner.enable_inference_mode()
         
         # Fine-tuned evaluation
         print("\n" + "="*50)
@@ -470,7 +503,7 @@ def main():
             plot_xai_properties(ft_attrs, args.output_dir, "Fine-Tuned")
         
         # Bias detection (fine-tuned) - collect attributions for shift report
-        ft_bias, ft_attributions = detect_bias_with_attributions(attributor, eval_data, sample_size=100)
+        ft_bias, ft_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
         print(f"Fine-Tuned Bias Analysis: {ft_bias}")
         final_results["finetuned_bias"] = ft_bias
         

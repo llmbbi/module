@@ -5,10 +5,9 @@
 # Models: Llama 3.2 1B, Qwen 2.5 1.5B, Phi 1.5, DeepSeek 1.3B, Gemma 3 1B
 MODELS=(
     # "unsloth/Llama-3.2-1B"
-    # "unsloth/Qwen2.5-1.5B-Instruct"
     # "microsoft/phi-1_5"
-    "deepseek-ai/deepseek-llm-1.3b-chat"
-    # "unsloth/gemma-3-1b-it"
+    # "unsloth/DeepSeek-R1-Distill-Qwen-1.5B"
+    "unsloth/gemma-3-1b-it"
     "unsloth/Qwen2.5-1.5B"
 )
 

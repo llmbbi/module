@@ -21,8 +21,21 @@ class BiasDetector:
             },
             "age": {
                 "young": ["young", "youth", "teenager", "teen", "child", "kid", "boy", "girl"],
-                "old": ["old", "elderly", "senior", "aged", "mature", "adult"]
+                "old": ["old", "elderly", "senior", "aged", "mature", "adult", "grandpa", "grandma"]
+            },
+            "race": {
+                "white": ["white", "caucasian", "european", "american"],
+                "black": ["black", "african", "afro", "negro"]
+            },
+            "religion": {
+                "christian": ["christian", "church", "bible", "jesus", "priest"],
+                "muslim": ["muslim", "islam", "mosque", "quran", "allah", "hijab"]
             }
+        }
+        # Sentiment-bearing attribute tokens for WAT
+        self.sentiment_attributes = {
+            "positive": ["good", "great", "excellent", "happy", "love", "wonderful", "best", "positive"],
+            "negative": ["bad", "terrible", "awful", "sad", "hate", "worst", "horrible", "negative"]
         }
 
     def compute_attribution_mass(self, attribution_list, token_set):
@@ -79,24 +92,86 @@ class BiasDetector:
         # Handle cases with no mass (avoid NaN)
         if np.all(masses_a == 0) and np.all(masses_b == 0):
             t_stat, p_val = 0.0, 1.0
-        elif np.std(masses_a) == 0 and np.std(masses_b) == 0 and np.mean(masses_a) == np.mean(masses_b):
-            t_stat, p_val = 0.0, 1.0
+            cohen_d = 0.0
+        elif np.std(masses_a) == 0 and np.std(masses_b) == 0:
+            if np.mean(masses_a) == np.mean(masses_b):
+                t_stat, p_val = 0.0, 1.0
+                cohen_d = 0.0
+            else:
+                t_stat, p_val = (np.inf if np.mean(masses_a) > np.mean(masses_b) else -np.inf), 0.0
+                cohen_d = np.inf
         else:
             try:
                 t_stat, p_val = stats.ttest_ind(masses_a, masses_b, equal_var=False)
+                
+                # Cohen's d = (mean1 - mean2) / pooled_std
+                n1, n2 = len(masses_a), len(masses_b)
+                v1, v2 = np.var(masses_a, ddof=1), np.var(masses_b, ddof=1)
+                pooled_std = np.sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2))
+                if pooled_std > 0:
+                    cohen_d = (np.mean(masses_a) - np.mean(masses_b)) / pooled_std
+                else:
+                    cohen_d = 0.0
+                    
                 if np.isnan(t_stat):
-                    t_stat, p_val = 0.0, 1.0
+                    t_stat, p_val, cohen_d = 0.0, 1.0, 0.0
             except:
-                t_stat, p_val = 0.0, 1.0
+                t_stat, p_val, cohen_d = 0.0, 1.0, 0.0
         
+        # 95% Confidence Interval for the difference in means
+        mean_diff = np.mean(masses_a) - np.mean(masses_b)
+        se_diff = np.sqrt(np.var(masses_a, ddof=1)/len(masses_a) + np.var(masses_b, ddof=1)/len(masses_b)) if len(masses_a) > 0 and len(masses_b) > 0 else 0
+        ci_low = mean_diff - 1.96 * se_diff
+        ci_high = mean_diff + 1.96 * se_diff
+
         return {
             "mean_mass_a": float(np.mean(masses_a)),
             "mean_mass_b": float(np.mean(masses_b)),
             "std_mass_a": float(np.std(masses_a)),
             "std_mass_b": float(np.std(masses_b)),
+            "mean_difference": float(mean_diff),
+            "cohen_d": float(cohen_d),
+            "ci_95": [float(ci_low), float(ci_high)],
             "t_statistic": float(t_stat),
             "p_value": float(p_val),
             "significant_bias": bool(p_val < 0.05)
+        }
+
+    def compute_wat_score(self, attributions_batch: List[List[Tuple[str, float]]], group_tokens: List[str]) -> Dict[str, float]:
+        """
+        Word Attribution Association Test (WAT) proxy for attributions.
+        Measures if demographic tokens are more associated with positive or negative sentiment tokens.
+        
+        association = Mean(Attribution of demographic token when positive tokens are high) - 
+                      Mean(Attribution of demographic token when negative tokens are high)
+        """
+        pos_attr_tokens = set(self.sentiment_attributes["positive"])
+        neg_attr_tokens = set(self.sentiment_attributes["negative"])
+        group_tokens_set = set(t.lower() for t in group_tokens)
+        
+        pos_associations = []
+        neg_associations = []
+        
+        for attr in attributions_batch:
+            # Find total mass of positive and negative attribute tokens
+            pos_mass = self.compute_attribution_mass(attr, pos_attr_tokens)
+            neg_mass = self.compute_attribution_mass(attr, neg_attr_tokens)
+            group_mass = self.compute_attribution_mass(attr, group_tokens_set)
+            
+            if group_mass > 0:
+                if pos_mass > neg_mass:
+                    pos_associations.append(group_mass)
+                elif neg_mass > pos_mass:
+                    neg_associations.append(group_mass)
+        
+        mean_pos = np.mean(pos_associations) if pos_associations else 0.0
+        mean_neg = np.mean(neg_associations) if neg_associations else 0.0
+        
+        return {
+            "wat_score": float(mean_pos - mean_neg),
+            "mean_pos_association": float(mean_pos),
+            "mean_neg_association": float(mean_neg),
+            "num_samples_with_group": len(pos_associations) + len(neg_associations)
         }
 
     # =========================================================================

@@ -679,6 +679,12 @@ def main():
         print("Starting training...")
         trainer.train()
         
+        # Save adapters
+        save_path = os.path.join(args.output_dir, "lora_adapters")
+        print(f"Saving fine-tuned adapters to {save_path}...")
+        model.save_pretrained(save_path)
+        tokenizer.save_pretrained(save_path)
+        
         # Switch back to inference mode
         FastLanguageModel.for_inference(model)
         
