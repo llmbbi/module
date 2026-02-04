@@ -7,8 +7,9 @@ MODELS=(
     # "unsloth/Llama-3.2-1B"
     # "unsloth/Qwen2.5-1.5B-Instruct"
     # "microsoft/phi-1_5"
-    "deepseek-ai/deepseek-coder-1.3b-instruct"
-    "unsloth/gemma-3-1b-it"
+    "deepseek-ai/deepseek-llm-1.3b-chat"
+    # "unsloth/gemma-3-1b-it"
+    "unsloth/Qwen2.5-1.5B"
 )
 
 # Output root directory
