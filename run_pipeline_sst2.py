@@ -56,10 +56,14 @@ def parse_arguments():
     parser.add_argument("--output-dir", default="outputs/modular_pipeline_enhanced")
     parser.add_argument("--train-size", type=int, default=0, help="Number of training samples to use. >0 subsamples, 0 or negative = full dataset")
     parser.add_argument("--eval-sample-size", type=int, default=50)
-    parser.add_argument("--epochs", type=float, default=1.0)
+    parser.add_argument("--epochs", type=float, default=3.0)
     parser.add_argument("--finetune", action="store_true", default=True)
     parser.add_argument("--max-seq-length", type=int, default=512)
     parser.add_argument("--load-in-4bit", action="store_true", default=True)
+    parser.add_argument("--lora-r", type=int, default=32, help="LoRA rank (default 32)")
+    parser.add_argument("--lora-alpha", type=int, default=64, help="LoRA alpha (default 64)")
+    parser.add_argument("--lora-dropout", type=float, default=0.0, help="LoRA dropout (default 0.0)")
+    parser.add_argument("--learning-rate", type=float, default=5e-5, help="Fine-tuning learning rate (default 5e-5)")
     parser.add_argument("--run-xai", action="store_true", default=True)
     parser.add_argument("--extended-xai", action="store_true", default=True, help="Run extended attribution methods (IG, Attention, Occlusion)")
     parser.add_argument("--run-shift-analysis", action="store_true", default=True, help="Run attribution shift analysis")
@@ -160,6 +164,49 @@ def plot_performance_comparison(final_results, output_dir):
     plt.close()
 
 
+def plot_bias_results(bias_results, output_dir, phase_name=""):
+    """Generate a grouped bar chart for bias analysis results."""
+    if not bias_results:
+        return
+
+    # For modular pipeline, bias_results is {dimension: {mean_mass_a, mean_mass_b, ...}}
+    dimensions = [d for d in bias_results if d not in ("summary",)]
+    if not dimensions:
+        return
+
+    fig, axes = plt.subplots(1, len(dimensions), figsize=(6 * len(dimensions), 6))
+    if len(dimensions) == 1:
+        axes = [axes]
+
+    colors_a = '#3498db'
+    colors_b = '#e74c3c'
+
+    for ax, dim in zip(axes, dimensions):
+        data = bias_results[dim]
+        group_a = data.get('group_a_name', 'Group A')
+        group_b = data.get('group_b_name', 'Group B')
+        mass_a = data.get('mean_mass_a', 0)
+        mass_b = data.get('mean_mass_b', 0)
+        cohen_d = data.get('cohen_d', 0)
+        p_val = data.get('p_value', 1.0)
+
+        bars = ax.bar([group_a, group_b], [mass_a, mass_b], color=[colors_a, colors_b], alpha=0.8)
+        for bar in bars:
+            h = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width() / 2., h, f'{h:.4f}',
+                    ha='center', va='bottom', fontsize=9)
+
+        ax.set_title(f"{dim.title()}\nCohen's d={cohen_d:.3f}  p={p_val:.3f}", fontsize=10)
+        ax.set_ylabel('Mean Attribution Mass')
+
+    fig.suptitle(f"Bias Analysis: {phase_name}", fontsize=13, fontweight='bold')
+    plt.tight_layout()
+    fname = f"{output_dir}/bias_results_{phase_name.lower().replace(' ', '_')}.png"
+    plt.savefig(fname, dpi=300)
+    plt.close()
+    print(f"  Bias chart saved to: {fname}")
+
+
 def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size, phase_name="", 
                                   extended_methods=True, shift_analyzer=None):
     """Compute comprehensive feature attribution and interpretability metrics."""
@@ -217,7 +264,7 @@ def compute_attribution_metrics(attributor, metrics_calc, eval_data, sample_size
             if name == "LIME":
                 lime_features_all.update([x[0] for x in explanation])
             
-            m = metrics_calc.compute_all_metrics(text, predict_fn, orig_prob, weights, top_features)
+            m = metrics_calc.compute_all_metrics(text, predict_fn, orig_prob, weights, top_features, attribution_list=explanation)
             for k, v in m.items():
                 raw_metrics[name][k].append(v)
             
@@ -317,9 +364,12 @@ def detect_bias_with_attributions(attributor, eval_data, sample_size=100):
     
     predict_fn = attributor.get_predict_proba_fn()
     bias_detector = BiasDetector()
+
+    # Only analyze gender and age dimensions (exclude race and religion)
+    filtered_groups = {k: v for k, v in bias_detector.demographic_groups.items() if k in ("gender", "age")}
     
     all_demographic_tokens = []
-    for dimension in bias_detector.demographic_groups.values():
+    for dimension in filtered_groups.values():
         for group_tokens in dimension.values():
             all_demographic_tokens.extend(group_tokens)
     
@@ -343,11 +393,11 @@ def detect_bias_with_attributions(attributor, eval_data, sample_size=100):
         lime_exp = attributor.explain_lime(text, predict_fn, num_features=50, num_samples=50)
         all_attributions.append(lime_exp)
     
-    # Run multi-group analysis
-    bias_results = bias_detector.analyze_multiple_groups(all_attributions)
+    # Run multi-group analysis (gender and age only)
+    bias_results = bias_detector.analyze_multiple_groups(all_attributions, groups=filtered_groups)
     
     # Add WAT scores
-    for dimension, groups in bias_detector.demographic_groups.items():
+    for dimension, groups in filtered_groups.items():
         if dimension in bias_results:
             for group_name, tokens in groups.items():
                 wat_res = bias_detector.compute_wat_score(all_attributions, tokens)
@@ -428,6 +478,7 @@ def main():
     zs_bias, zs_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
     print(f"Zero-Shot Bias Analysis: {zs_bias}")
     final_results["zero_shot_bias"] = zs_bias
+    plot_bias_results(zs_bias, args.output_dir, "Zero-Shot")
     
     # Fine-tuning or Loading Adapter
     if args.finetune or args.load_adapter:
@@ -438,7 +489,7 @@ def main():
         if args.finetune:
             # Configure LoRA adapters for training (switches model to training mode)
             print("Configuring LoRA adapters...")
-            finetuner.configure_lora()
+            finetuner.configure_lora(r=args.lora_r, lora_alpha=args.lora_alpha, dropout=args.lora_dropout)
             
             full_train_ds = dataset["train"].shuffle(seed=42)
             total_train = len(full_train_ds)
@@ -449,7 +500,7 @@ def main():
                 print(f"Using FULL training dataset ({total_train} samples).")
                 train_ds = full_train_ds
             
-            finetuner.train(train_ds, epochs=args.epochs)
+            finetuner.train(train_ds, epochs=args.epochs, learning_rate=args.learning_rate)
             
             # Free up memory after training
             import gc
@@ -506,6 +557,7 @@ def main():
         ft_bias, ft_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
         print(f"Fine-Tuned Bias Analysis: {ft_bias}")
         final_results["finetuned_bias"] = ft_bias
+        plot_bias_results(ft_bias, args.output_dir, "Fine-Tuned")
         
         # Generate bias shift report
         if zs_attributions and ft_attributions:

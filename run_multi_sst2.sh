@@ -7,9 +7,23 @@ MODELS=(
     # "unsloth/Llama-3.2-1B"
     # "microsoft/phi-1_5"
     # "unsloth/DeepSeek-R1-Distill-Qwen-1.5B"
-    "unsloth/gemma-3-1b-it"
-    "unsloth/Qwen2.5-1.5B"
-)
+    # "unsloth/gemma-3-1b-it"
+    # "unsloth/Qwen2.5-1.5B"
+
+    # tiiuae/Falcon3-7B-Instruct
+    # Qwen/Qwen2.5-7B-Instruct
+    # nvidia/AceInstruct-7B
+    # Intel/neural-chat-7b-v3-1
+    # berkeley-nest/Starling-LM-7B-alpha
+    # mistralai/Mistral-7B-Instruct-v0.3
+
+    meta-llama/Llama-3.2-3B
+    # tiiuae/Falcon3-3B-Instruct
+    # ibm-granite/granite-3.1-3b-a800m-instruct
+    stabilityai/stablelm-zephyr-3b
+    ibm-research/PowerLM-3b
+    # togethercomputer/RedPajama-INCITE-Instruct-3B-v1
+    )
 
 # Output root directory
 OUTPUT_ROOT="outputs/family_comparison_$(date +%m%d_%H%M)"
@@ -26,12 +40,15 @@ for MODEL in "${MODELS[@]}"; do
     echo "PROCESSING MODEL: $MODEL"
     echo "============================================================"
     
-    python run_pipeline_modular.py \
+    python run_pipeline_sst2.py \
         --model-name "$MODEL" \
         --output-dir "$MODEL_OUT_DIR" \
         --train-size 0 \
         --eval-sample-size 50 \
-        --epochs 1 \
+        --epochs 3 \
+        --learning-rate 5e-5 \
+        --lora-r 32 \
+        --lora-alpha 64 \
         --finetune \
         --load-in-4bit \
         --run-xai \

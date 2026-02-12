@@ -1,0 +1,56 @@
+---------------------------------------
+Begin Slurm Prolog: Feb-08-2026 23:10:53
+Job ID:    4060061
+User ID:   jyoon370
+Account:   coc
+Job name:  run_mabsa_multi_families.sh
+Partition: coc-cpu
+QOS:       coc-ice
+---------------------------------------
+Starting M-ABSA Multi-Family Model Comparison Pipeline...
+Results will be saved to: outputs/mabsa_family_comparison_0208_2310
+============================================================
+PROCESSING MODEL: Qwen/Qwen2.5-7B
+============================================================
+Traceback (most recent call last):
+  File "/storage/ice1/6/3/jyoon370/llm-interpretability/run_pipeline_mabsa.py", line 15, in <module>
+    import unsloth
+ModuleNotFoundError: No module named 'unsloth'
+[ERROR] M-ABSA Pipeline failed for Qwen/Qwen2.5-7B. Continuing to next model...
+============================================================
+PROCESSING MODEL: meta-llama/Meta-Llama-3.1-8B
+============================================================
+Traceback (most recent call last):
+  File "/storage/ice1/6/3/jyoon370/llm-interpretability/run_pipeline_mabsa.py", line 15, in <module>
+    import unsloth
+ModuleNotFoundError: No module named 'unsloth'
+[ERROR] M-ABSA Pipeline failed for meta-llama/Meta-Llama-3.1-8B. Continuing to next model...
+============================================================
+PROCESSING MODEL: mistralai/Mistral-7B-v0.3
+============================================================
+Traceback (most recent call last):
+  File "/storage/ice1/6/3/jyoon370/llm-interpretability/run_pipeline_mabsa.py", line 15, in <module>
+    import unsloth
+ModuleNotFoundError: No module named 'unsloth'
+[ERROR] M-ABSA Pipeline failed for mistralai/Mistral-7B-v0.3. Continuing to next model...
+============================================================
+PROCESSING MODEL: tiiuae/falcon-7b
+============================================================
+Traceback (most recent call last):
+  File "/storage/ice1/6/3/jyoon370/llm-interpretability/run_pipeline_mabsa.py", line 15, in <module>
+    import unsloth
+ModuleNotFoundError: No module named 'unsloth'
+[ERROR] M-ABSA Pipeline failed for tiiuae/falcon-7b. Continuing to next model...
+M-ABSA Multi-Family Model Comparison Complete!
+---------------------------------------
+Begin Slurm Epilog: Feb-08-2026 23:10:53
+Job ID:        4060061
+User ID:       jyoon370
+Account:       coc
+Job name:      run_mabsa_multi_families.sh
+Resources:     cpu=1,mem=4G,node=1
+Rsrc Used:     cput=00:00:00,vmem=0,walltime=00:00:00,mem=6508K,energy_used=0
+Partition:     coc-cpu
+QOS:           coc-ice
+Nodes:         atl1-1-01-005-1-1
+---------------------------------------

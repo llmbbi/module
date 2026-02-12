@@ -359,6 +359,40 @@ class FeatureAttributor:
         """Returns a list of available attribution methods."""
         return ["LIME", "SHAP", "IntegratedGradients", "Occlusion"]
 
+    def compute_identity(self, explanation1, explanation2):
+        """Compute identity score: same input should yield the same explanation.
+        Returns cosine similarity between two explanation vectors.
+        Explanations are lists of (token, score) tuples.
+        """
+        if not explanation1 or not explanation2:
+            return 0.0
+        # Build aligned vectors using token intersection (order-independent)
+        tokens1 = {t: s for t, s in explanation1}
+        tokens2 = {t: s for t, s in explanation2}
+        all_tokens = set(tokens1.keys()) | set(tokens2.keys())
+        if not all_tokens:
+            return 0.0
+        vec1 = np.array([tokens1.get(t, 0.0) for t in all_tokens])
+        vec2 = np.array([tokens2.get(t, 0.0) for t in all_tokens])
+        norm1, norm2 = np.linalg.norm(vec1), np.linalg.norm(vec2)
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+        return float(np.dot(vec1, vec2) / (norm1 * norm2))
+
+    def compute_stability(self, explanation1, explanation2):
+        """Compute stability score: similar inputs should yield similar explanations.
+        Returns cosine similarity between two explanation vectors (same logic as identity
+        but semantically used for perturbed inputs).
+        """
+        return self.compute_identity(explanation1, explanation2)
+
+    def compute_cross_method_agreement(self, explanations1, explanations2):
+        """Compute agreement between two XAI methods' explanations.
+        Each input is a list of (token, score) tuples from a different method.
+        Returns cosine similarity over a shared token vocabulary.
+        """
+        return self.compute_identity(explanations1, explanations2)
+
     def explain(self, text, method, predict_fn=None, **kwargs):
         """
         Unified interface to compute attributions using any available method.

@@ -1,7 +1,7 @@
 import os
 import torch
 from unsloth import FastLanguageModel
-from transformers import TrainingArguments, DataCollatorForLanguageModeling
+from transformers import TrainingArguments, default_data_collator
 from trl import SFTTrainer, SFTConfig
 from datasets import Dataset
 
@@ -114,7 +114,7 @@ class LoRAFineTuner:
             "labels": labels_list
         }
 
-    def train(self, train_dataset, epochs=1.0, learning_rate=2e-4, batch_size=2):
+    def train(self, train_dataset, epochs=3.0, learning_rate=5e-5, batch_size=2):
         """Fine-tunes the model on the provided dataset."""
         if self.model is None:
             raise ValueError("Model not configured. Call load_model() and configure_lora() first.")
@@ -128,24 +128,28 @@ class LoRAFineTuner:
         
         from transformers import Trainer, TrainingArguments
         
+        # NOTE: We use default_data_collator (not DataCollatorForLanguageModeling)
+        # because DataCollatorForLanguageModeling overwrites the custom labels
+        # column with input_ids.clone(), discarding the prompt masking (-100)
+        # that _tokenize_with_masking carefully applied.
         trainer = Trainer(
             model=self.model,
             tokenizer=self.tokenizer,
             train_dataset=formatted_dataset,
-            data_collator=DataCollatorForLanguageModeling(tokenizer=self.tokenizer, mlm=False),
+            data_collator=default_data_collator,
             args=TrainingArguments(
                 output_dir=f"{self.output_dir}/checkpoints",
                 num_train_epochs=epochs,
                 per_device_train_batch_size=batch_size,
                 gradient_accumulation_steps=4,
-                warmup_steps=5,
+                warmup_ratio=0.05,
                 learning_rate=learning_rate,
                 fp16=not torch.cuda.is_bf16_supported(),
                 bf16=torch.cuda.is_bf16_supported(),
                 logging_steps=50,
                 optim="adamw_8bit",
                 weight_decay=0.01,
-                lr_scheduler_type="linear",
+                lr_scheduler_type="cosine",
                 seed=42,
                 save_strategy="no",
             ),

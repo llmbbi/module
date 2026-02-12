@@ -449,6 +449,66 @@ If you use this work in your research, please cite:
 }
 ```
 
+## M-ABSA Experiments
+
+The M-ABSA (Multilingual Aspect-Based Sentiment Analysis) experiments extend the interpretability framework to 3-class sentiment classification using the Multilingual-NLP/M-ABSA dataset.
+
+### Key Features
+- **3-Class Classification**: Sentiment analysis with labels 0 (negative), 1 (neutral), 2 (positive)
+- **Multilingual Support**: Handles multiple languages for aspect-based sentiment analysis
+- **Adapted Pipeline**: Modified from the SST-2 pipeline to handle 3-class prediction and evaluation
+
+### Dataset Issues and Solutions
+- **Problem**: Original M-ABSA datasets contain triplet extraction format (text####[aspect, category, sentiment]) rather than simple classification labels
+- **Solution**: Updated pipeline to prioritize multilingual sentiment datasets with proper 3-class labels:
+  1. `tyqiangz/multilingual-sentiments` - 3-class multilingual sentiment (positive/neutral/negative)
+  2. `C-MTEB/MultilingualSentiment-classification` - Multilingual sentiment classification  
+  3. `cardiffnlp/tweet_sentiment_multilingual` - Tweet sentiment analysis
+  4. Fallback to original M-ABSA datasets if needed
+
+### Current Status
+- Pipeline configured for 3-class sentiment classification (0=negative, 1=neutral, 2=positive)
+- Multi-family model comparison enabled (9 models: 5 instruct + 4 base variants)
+- Dataset loading with automatic fallback mechanism
+- Job submitted to SLURM cluster for execution
+
+### Running M-ABSA Experiments
+
+Test the dataset loading:
+```bash
+python test_mabsa_dataset.py
+```
+
+Run the full M-ABSA pipeline:
+```bash
+sbatch run_mabsa_pipeline.sbatch
+```
+
+Or run the multi-family comparison locally:
+```bash
+bash run_mabsa_multi_families.sh
+```
+
+Or run locally:
+```bash
+python run_pipeline_mabsa.py \
+  --output-dir outputs/mabsa_experiment \
+  --train-size 1000 \
+  --eval-sample-size 50 \
+  --epochs 1.0 \
+  --finetune \
+  --run-xai \
+  --extended-xai \
+  --run-shift-analysis \
+  --bias-sample-size 100
+```
+
+### Files
+- `run_pipeline_mabsa.py`: Main M-ABSA pipeline script
+- `run_mabsa_pipeline.sbatch`: SLURM batch script for M-ABSA experiments (uses multi-family script)
+- `run_mabsa_multi_families.sh`: Multi-family comparison script for M-ABSA experiments
+- `test_mabsa_dataset.py`: Dataset loading and validation script
+
 ## Related Work
 
 This project builds on foundational research in model interpretability and attribution methods:

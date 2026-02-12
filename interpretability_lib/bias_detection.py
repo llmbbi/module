@@ -13,29 +13,397 @@ class BiasDetector:
     """
     
     def __init__(self):
-        # Common demographic token groups
+        # Multilingual demographic token groups
+        # Covers the 21 M-ABSA languages: ar, da, de, en, es, fr, hi, hr, id,
+        # ja, ko, nl, pt, ru, sk, sv, sw, th, tr, vi, zh
         self.demographic_groups = {
             "gender": {
-                "male": ["he", "him", "his", "man", "male", "boy", "father", "son", "husband", "brother"],
-                "female": ["she", "her", "hers", "woman", "female", "girl", "mother", "daughter", "wife", "sister"]
+                "male": [
+                    # English
+                    "he", "him", "his", "man", "male", "boy", "father", "son", "husband", "brother",
+                    # Arabic
+                    "هو", "رجل", "ذكر", "ولد", "أب", "ابن", "زوج", "أخ",
+                    # Danish
+                    "han", "mand", "dreng", "far", "søn", "bror", "ægtemand",
+                    # German
+                    "er", "ihm", "sein", "mann", "männlich", "junge", "vater", "sohn", "ehemann", "bruder",
+                    # Spanish
+                    "él", "hombre", "masculino", "chico", "niño", "padre", "hijo", "esposo", "hermano", "varón",
+                    # French
+                    "il", "lui", "homme", "masculin", "garçon", "père", "fils", "mari", "frère",
+                    # Hindi
+                    "वह", "उसका", "आदमी", "पुरुष", "लड़का", "पिता", "बेटा", "पति", "भाई",
+                    # Croatian
+                    "on", "njega", "muškarac", "muško", "dječak", "otac", "sin", "muž", "brat",
+                    # Indonesian
+                    "dia", "laki-laki", "pria", "ayah", "putra", "suami", "saudara",
+                    # Japanese
+                    "彼", "男", "男性", "少年", "父", "息子", "夫", "兄弟",
+                    # Korean
+                    "그", "남자", "남성", "소년", "아버지", "아들", "남편", "형제", "오빠", "형",
+                    # Dutch
+                    "hij", "hem", "zijn", "man", "mannelijk", "jongen", "vader", "zoon", "echtgenoot", "broer",
+                    # Portuguese
+                    "ele", "homem", "masculino", "menino", "pai", "filho", "marido", "irmão",
+                    # Russian
+                    "он", "его", "мужчина", "мужской", "мальчик", "отец", "сын", "муж", "брат",
+                    # Slovak
+                    "muž", "chlapec", "otec", "syn", "manžel", "brat",
+                    # Swedish
+                    "han", "man", "pojke", "far", "pappa", "son", "make", "bror",
+                    # Swahili
+                    "yeye", "mtu", "mvulana", "baba", "mwana", "mume", "kaka", "ndugu",
+                    # Thai
+                    "เขา", "ผู้ชาย", "ชาย", "เด็กชาย", "พ่อ", "ลูกชาย", "สามี", "พี่ชาย",
+                    # Turkish
+                    "erkek", "adam", "oğlan", "baba", "oğul", "koca", "kardeş", "abi",
+                    # Vietnamese
+                    "anh", "ông", "đàn ông", "nam", "cha", "bố", "chồng", "anh trai",
+                    # Chinese
+                    "他", "男人", "男性", "男孩", "父亲", "儿子", "丈夫", "兄弟", "爸爸",
+                ],
+                "female": [
+                    # English
+                    "she", "her", "hers", "woman", "female", "girl", "mother", "daughter", "wife", "sister",
+                    # Arabic
+                    "هي", "امرأة", "أنثى", "بنت", "أم", "ابنة", "زوجة", "أخت",
+                    # Danish
+                    "hun", "kvinde", "pige", "mor", "datter", "søster", "hustru",
+                    # German
+                    "sie", "ihr", "frau", "weiblich", "mädchen", "mutter", "tochter", "ehefrau", "schwester",
+                    # Spanish
+                    "ella", "mujer", "femenino", "chica", "niña", "madre", "hija", "esposa", "hermana",
+                    # French
+                    "elle", "femme", "féminin", "fille", "mère", "épouse", "sœur",
+                    # Hindi
+                    "वह", "उसकी", "औरत", "महिला", "लड़की", "माँ", "बेटी", "पत्नी", "बहन",
+                    # Croatian
+                    "ona", "žena", "žensko", "djevojka", "majka", "kći", "supruga", "sestra",
+                    # Indonesian
+                    "perempuan", "wanita", "ibu", "putri", "istri", "saudari",
+                    # Japanese
+                    "彼女", "女", "女性", "少女", "母", "娘", "妻", "姉妹",
+                    # Korean
+                    "그녀", "여자", "여성", "소녀", "어머니", "딸", "아내", "자매", "언니", "누나",
+                    # Dutch
+                    "zij", "haar", "vrouw", "vrouwelijk", "meisje", "moeder", "dochter", "echtgenote", "zus",
+                    # Portuguese
+                    "ela", "mulher", "feminino", "menina", "mãe", "filha", "esposa", "irmã",
+                    # Russian
+                    "она", "её", "женщина", "женский", "девочка", "мать", "дочь", "жена", "сестра",
+                    # Slovak
+                    "žena", "dievča", "matka", "dcéra", "manželka", "sestra",
+                    # Swedish
+                    "hon", "kvinna", "flicka", "mor", "mamma", "dotter", "maka", "syster",
+                    # Swahili
+                    "mwanamke", "msichana", "mama", "binti", "mke", "dada",
+                    # Thai
+                    "เธอ", "ผู้หญิง", "หญิง", "เด็กหญิง", "แม่", "ลูกสาว", "ภรรยา", "พี่สาว",
+                    # Turkish
+                    "kadın", "kız", "anne", "kızı", "karı", "abla",
+                    # Vietnamese
+                    "chị", "bà", "phụ nữ", "nữ", "mẹ", "vợ", "chị gái",
+                    # Chinese
+                    "她", "女人", "女性", "女孩", "母亲", "女儿", "妻子", "姐妹", "妈妈",
+                ],
             },
             "age": {
-                "young": ["young", "youth", "teenager", "teen", "child", "kid", "boy", "girl"],
-                "old": ["old", "elderly", "senior", "aged", "mature", "adult", "grandpa", "grandma"]
+                "young": [
+                    # English
+                    "young", "youth", "teenager", "teen", "child", "kid", "boy", "girl",
+                    # Arabic
+                    "شاب", "شباب", "مراهق", "طفل",
+                    # Danish
+                    "ung", "ungdom", "teenager", "barn",
+                    # German
+                    "jung", "jugend", "teenager", "kind",
+                    # Spanish
+                    "joven", "juventud", "adolescente", "niño", "niña",
+                    # French
+                    "jeune", "jeunesse", "adolescent", "enfant",
+                    # Hindi
+                    "जवान", "युवा", "किशोर", "बच्चा",
+                    # Croatian
+                    "mlad", "mladost", "tinejdžer", "dijete",
+                    # Indonesian
+                    "muda", "remaja", "anak",
+                    # Japanese
+                    "若い", "若者", "青年", "子供", "少年", "少女",
+                    # Korean
+                    "젊은", "청년", "청소년", "아이", "어린이",
+                    # Dutch
+                    "jong", "jeugd", "tiener", "kind",
+                    # Portuguese
+                    "jovem", "juventude", "adolescente", "criança",
+                    # Russian
+                    "молодой", "молодёжь", "подросток", "ребёнок",
+                    # Slovak
+                    "mladý", "mládež", "tínedžer", "dieťa",
+                    # Swedish
+                    "ung", "ungdom", "tonåring", "barn",
+                    # Swahili
+                    "kijana", "vijana", "mtoto",
+                    # Thai
+                    "หนุ่ม", "สาว", "เยาวชน", "วัยรุ่น", "เด็ก",
+                    # Turkish
+                    "genç", "gençlik", "çocuk",
+                    # Vietnamese
+                    "trẻ", "thanh niên", "thiếu niên", "trẻ em",
+                    # Chinese
+                    "年轻", "青年", "少年", "孩子", "儿童",
+                ],
+                "old": [
+                    # English
+                    "old", "elderly", "senior", "aged", "mature", "adult", "grandpa", "grandma",
+                    # Arabic
+                    "كبير", "مسن", "عجوز", "جد", "جدة",
+                    # Danish
+                    "gammel", "ældre", "bedstefar", "bedstemor",
+                    # German
+                    "alt", "älter", "ältere", "opa", "oma", "großvater", "großmutter",
+                    # Spanish
+                    "viejo", "anciano", "mayor", "abuelo", "abuela",
+                    # French
+                    "vieux", "âgé", "ancien", "aîné", "grand-père", "grand-mère",
+                    # Hindi
+                    "बूढ़ा", "वृद्ध", "बुजुर्ग", "दादा", "दादी",
+                    # Croatian
+                    "star", "stariji", "djed", "baka",
+                    # Indonesian
+                    "tua", "lansia", "kakek", "nenek",
+                    # Japanese
+                    "老人", "高齢", "年配", "祖父", "祖母", "おじいさん", "おばあさん",
+                    # Korean
+                    "늙은", "노인", "어르신", "할아버지", "할머니",
+                    # Dutch
+                    "oud", "ouderen", "bejaarde", "opa", "oma",
+                    # Portuguese
+                    "velho", "idoso", "avô", "avó",
+                    # Russian
+                    "старый", "пожилой", "дедушка", "бабушка",
+                    # Slovak
+                    "starý", "starší", "dedko", "babka",
+                    # Swedish
+                    "gammal", "äldre", "farfar", "mormor",
+                    # Swahili
+                    "mzee", "bibi", "babu",
+                    # Thai
+                    "แก่", "ผู้สูงอายุ", "คนชรา", "ปู่", "ย่า",
+                    # Turkish
+                    "yaşlı", "büyük", "dede", "nine", "büyükanne", "büyükbaba",
+                    # Vietnamese
+                    "già", "người già", "ông", "bà",
+                    # Chinese
+                    "老", "老人", "老年", "年老", "爷爷", "奶奶", "祖父", "祖母",
+                ],
             },
             "race": {
-                "white": ["white", "caucasian", "european", "american"],
-                "black": ["black", "african", "afro", "negro"]
+                "white": [
+                    # English
+                    "white", "caucasian", "european", "american",
+                    # Arabic
+                    "أبيض", "أوروبي", "قوقازي",
+                    # German
+                    "weiß", "europäisch", "kaukasisch",
+                    # Spanish
+                    "blanco", "europeo", "caucásico",
+                    # French
+                    "blanc", "européen", "caucasien",
+                    # Hindi
+                    "गोरा", "यूरोपीय",
+                    # Japanese
+                    "白人", "ヨーロッパ人",
+                    # Korean
+                    "백인", "유럽인",
+                    # Dutch
+                    "wit", "europees", "blank",
+                    # Portuguese
+                    "branco", "europeu", "caucasiano",
+                    # Russian
+                    "белый", "европеец", "кавказец",
+                    # Swedish
+                    "vit", "europeisk",
+                    # Thai
+                    "คนขาว", "ยุโรป",
+                    # Turkish
+                    "beyaz", "avrupalı",
+                    # Vietnamese
+                    "da trắng", "người châu âu",
+                    # Chinese
+                    "白人", "欧洲人", "白种人",
+                ],
+                "black": [
+                    # English
+                    "black", "african", "afro",
+                    # Arabic
+                    "أسود", "أفريقي",
+                    # German
+                    "schwarz", "afrikanisch",
+                    # Spanish
+                    "negro", "africano", "afro",
+                    # French
+                    "noir", "africain", "afro",
+                    # Hindi
+                    "काला", "अफ्रीकी",
+                    # Japanese
+                    "黒人", "アフリカ人",
+                    # Korean
+                    "흑인", "아프리카인",
+                    # Dutch
+                    "zwart", "afrikaans",
+                    # Portuguese
+                    "negro", "preto", "africano", "afro",
+                    # Russian
+                    "чёрный", "африканец",
+                    # Swedish
+                    "svart", "afrikansk",
+                    # Thai
+                    "คนดำ", "แอฟริกัน",
+                    # Turkish
+                    "siyah", "afrikalı",
+                    # Vietnamese
+                    "da đen", "người châu phi",
+                    # Chinese
+                    "黑人", "非洲人",
+                ],
             },
             "religion": {
-                "christian": ["christian", "church", "bible", "jesus", "priest"],
-                "muslim": ["muslim", "islam", "mosque", "quran", "allah", "hijab"]
-            }
+                "christian": [
+                    # English
+                    "christian", "church", "bible", "jesus", "priest",
+                    # Arabic
+                    "مسيحي", "كنيسة", "إنجيل", "يسوع", "قسيس",
+                    # German
+                    "christlich", "kirche", "bibel", "priester",
+                    # Spanish
+                    "cristiano", "iglesia", "biblia", "sacerdote",
+                    # French
+                    "chrétien", "église", "prêtre",
+                    # Hindi
+                    "ईसाई", "गिरजाघर", "बाइबिल", "पादरी",
+                    # Japanese
+                    "キリスト教", "教会", "聖書", "牧師",
+                    # Korean
+                    "기독교", "교회", "성경", "목사",
+                    # Dutch
+                    "christelijk", "kerk", "bijbel", "priester",
+                    # Portuguese
+                    "cristão", "igreja", "bíblia", "padre",
+                    # Russian
+                    "христианин", "церковь", "библия", "священник",
+                    # Swedish
+                    "kristen", "kyrka", "bibel", "präst",
+                    # Thai
+                    "คริสเตียน", "โบสถ์", "พระคัมภีร์",
+                    # Turkish
+                    "hristiyan", "kilise", "incil", "papaz",
+                    # Vietnamese
+                    "thiên chúa giáo", "nhà thờ", "kinh thánh",
+                    # Chinese
+                    "基督教", "教堂", "圣经", "牧师",
+                ],
+                "muslim": [
+                    # English
+                    "muslim", "islam", "mosque", "quran", "allah", "hijab",
+                    # Arabic
+                    "مسلم", "إسلام", "مسجد", "قرآن", "الله", "حجاب",
+                    # German
+                    "muslimisch", "moschee", "koran", "kopftuch",
+                    # Spanish
+                    "musulmán", "mezquita", "corán",
+                    # French
+                    "musulman", "mosquée", "coran", "voile",
+                    # Hindi
+                    "मुस्लिम", "इस्लाम", "मस्जिद", "कुरान", "हिजाब",
+                    # Japanese
+                    "イスラム", "モスク", "コーラン", "ヒジャブ",
+                    # Korean
+                    "무슬림", "이슬람", "모스크", "코란", "히잡",
+                    # Dutch
+                    "moslim", "moskee", "koran", "hoofddoek",
+                    # Portuguese
+                    "muçulmano", "mesquita", "alcorão",
+                    # Russian
+                    "мусульманин", "ислам", "мечеть", "коран", "хиджаб",
+                    # Swedish
+                    "muslim", "moské", "koranen", "slöja",
+                    # Thai
+                    "มุสลิม", "อิสลาม", "มัสยิด", "อัลกุรอาน", "ฮิญาบ",
+                    # Turkish
+                    "müslüman", "cami", "kuran",
+                    # Vietnamese
+                    "hồi giáo", "nhà thờ hồi giáo",
+                    # Chinese
+                    "穆斯林", "伊斯兰", "清真寺", "古兰经",
+                ],
+            },
         }
-        # Sentiment-bearing attribute tokens for WAT
+        # Multilingual sentiment-bearing attribute tokens for WAT
         self.sentiment_attributes = {
-            "positive": ["good", "great", "excellent", "happy", "love", "wonderful", "best", "positive"],
-            "negative": ["bad", "terrible", "awful", "sad", "hate", "worst", "horrible", "negative"]
+            "positive": [
+                # English
+                "good", "great", "excellent", "happy", "love", "wonderful", "best", "positive",
+                # Arabic
+                "جيد", "ممتاز", "سعيد", "حب", "رائع", "أفضل",
+                # German
+                "gut", "großartig", "ausgezeichnet", "glücklich", "liebe", "wunderbar", "beste",
+                # Spanish
+                "bueno", "genial", "excelente", "feliz", "amor", "maravilloso", "mejor",
+                # French
+                "bon", "super", "excellent", "heureux", "amour", "merveilleux", "meilleur",
+                # Hindi
+                "अच्छा", "बढ़िया", "उत्कृष्ट", "खुश", "प्यार", "सर्वश्रेष्ठ",
+                # Japanese
+                "良い", "素晴らしい", "最高", "幸せ", "愛", "優秀",
+                # Korean
+                "좋은", "훌륭한", "최고", "행복", "사랑", "우수한",
+                # Dutch
+                "goed", "geweldig", "uitstekend", "blij", "liefde", "beste",
+                # Portuguese
+                "bom", "ótimo", "excelente", "feliz", "amor", "maravilhoso", "melhor",
+                # Russian
+                "хороший", "отличный", "превосходный", "счастливый", "любовь", "лучший",
+                # Thai
+                "ดี", "ยอดเยี่ยม", "สุดยอด", "มีความสุข", "รัก",
+                # Turkish
+                "iyi", "harika", "mükemmel", "mutlu", "sevgi", "en iyi",
+                # Vietnamese
+                "tốt", "tuyệt vời", "xuất sắc", "hạnh phúc", "yêu",
+                # Chinese
+                "好", "很好", "优秀", "开心", "爱", "最好",
+            ],
+            "negative": [
+                # English
+                "bad", "terrible", "awful", "sad", "hate", "worst", "horrible", "negative",
+                # Arabic
+                "سيء", "فظيع", "حزين", "كراهية", "أسوأ",
+                # German
+                "schlecht", "schrecklich", "furchtbar", "traurig", "hass", "schlimmste",
+                # Spanish
+                "malo", "terrible", "horrible", "triste", "odio", "peor",
+                # French
+                "mauvais", "terrible", "affreux", "triste", "haine", "pire", "horrible",
+                # Hindi
+                "बुरा", "भयानक", "दुखी", "नफरत", "सबसे बुरा",
+                # Japanese
+                "悪い", "ひどい", "最悪", "悲しい", "嫌い",
+                # Korean
+                "나쁜", "끔찍한", "최악", "슬픈", "싫어",
+                # Dutch
+                "slecht", "verschrikkelijk", "vreselijk", "verdrietig", "haat", "slechtste",
+                # Portuguese
+                "mau", "ruim", "terrível", "horrível", "triste", "ódio", "pior",
+                # Russian
+                "плохой", "ужасный", "грустный", "ненависть", "худший",
+                # Thai
+                "แย่", "เลว", "น่ากลัว", "เศร้า", "เกลียด",
+                # Turkish
+                "kötü", "korkunç", "berbat", "üzgün", "nefret", "en kötü",
+                # Vietnamese
+                "xấu", "tệ", "kinh khủng", "buồn", "ghét",
+                # Chinese
+                "坏", "糟糕", "可怕", "难过", "恨", "最差",
+            ],
         }
 
     def compute_attribution_mass(self, attribution_list, token_set):
@@ -384,3 +752,47 @@ class BiasDetector:
         
         return report
 
+    def analyze_bias_patterns(
+        self,
+        all_attributions: Dict[str, List[Dict[str, Any]]],
+        groups: Optional[Dict[str, Dict[str, List[str]]]] = None,
+    ) -> Dict[str, Any]:
+        """Analyse demographic bias patterns across XAI methods.
+
+        Args:
+            all_attributions: ``{method_name: [{"text": ..., "attribution": [(word, score), ...],
+                               "prediction": int, "label": int}, ...]}``
+            groups: Demographic token groups to test.  Defaults to ``self.demographic_groups``.
+
+        Returns:
+            Nested dict ``{method: {dimension: bias_analysis_result}}`` plus a summary.
+        """
+        if groups is None:
+            groups = self.demographic_groups
+
+        results: Dict[str, Any] = {}
+
+        for method_name, attr_dicts in all_attributions.items():
+            raw_attributions = [d["attribution"] for d in attr_dicts]
+
+            method_results: Dict[str, Any] = {}
+            for dimension, sub_groups in groups.items():
+                group_names = list(sub_groups.keys())
+                if len(group_names) < 2:
+                    continue
+                group_a_tokens = sub_groups[group_names[0]]
+                group_b_tokens = sub_groups[group_names[1]]
+                bias = self.analyze_bias(raw_attributions, group_a_tokens, group_b_tokens)
+                bias["group_a_name"] = group_names[0]
+                bias["group_b_name"] = group_names[1]
+                method_results[dimension] = bias
+
+            results[method_name] = method_results
+
+        results["summary"] = {
+            "methods_analyzed": list(all_attributions.keys()),
+            "dimensions_analyzed": list(groups.keys()),
+            "num_samples_per_method": {m: len(v) for m, v in all_attributions.items()},
+        }
+
+        return results
