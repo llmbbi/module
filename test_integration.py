@@ -3,7 +3,7 @@ import sys
 import os
 import torch
 import numpy as np
-from interpretability_lib import LoRAFineTuner, FeatureAttributor, MetricsCalculator, BiasDetector
+from interpretability_lib_sst2 import LoRAFineTuner, FeatureAttributor, MetricsCalculator, BiasDetector
 from datasets import Dataset
 
 def mock_predict_fn(texts):

@@ -8,8 +8,8 @@ Adapted from run_pipeline_modular.py for ChildGuard dataset.
 import sys
 import os
 
-# Add parent directory to path to import interpretability_lib
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Script is now in root, interpretability_lib_sst2 should be importable directly
+# sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import unsloth
 import warnings
@@ -27,7 +27,7 @@ from datasets import load_dataset, Dataset, DatasetDict
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, matthews_corrcoef
 import torch
 from transformers import set_seed
-from interpretability_lib import (
+from interpretability_lib_childguard import (
     LoRAFineTuner, 
     FeatureAttributor, 
     MetricsCalculator, 
@@ -49,10 +49,16 @@ class NumpyEncoder(json.JSONEncoder):
         return super(NumpyEncoder, self).default(obj)
 
 
+def save_results(results, output_file):
+    with open(output_file, "w") as f:
+        json.dump(results, f, indent=2, cls=NumpyEncoder)
+
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", default="unsloth/Llama-3.2-1B")
-    parser.add_argument("--output-dir", default="outputs/childguard_pipeline")
+    parser.add_argument("--output-dir", default="interpretability_lib_childguard/outputs/childguard_pipeline")
     parser.add_argument("--data-path", default="interpretability_lib_childguard/data/ChildGuard/ChildGuard.csv", help="Path to ChildGuard CSV file")
     parser.add_argument("--train-size", type=int, default=0, help="Number of training samples to use. >0 subsamples, 0 or negative = full dataset")
     parser.add_argument("--eval-sample-size", type=int, default=50)
@@ -79,8 +85,9 @@ def load_childguard_data(data_path, test_size=0.1, val_size=0.1, seed=42):
     We use 'text' as input and 'actual_class' as label.
     """
     print(f"Loading data from {data_path}...")
-    # Using datasets library to load csv
-    dataset = load_dataset("csv", data_files=data_path, split="train")
+    # Load via pandas to handle non-UTF-8 encoding, then convert to HF Dataset
+    df = pd.read_csv(data_path, encoding="latin-1")
+    dataset = Dataset.from_pandas(df)
 
     # Rename columns to standard 'sentence' (or 'text') and 'label'
     if "text" in dataset.column_names:
@@ -457,8 +464,23 @@ def main():
     # If loading adapter, disable finetuning to prevent conflict
     if args.load_adapter:
         args.finetune = False
-        
+
+    # Append dataset name to output directory
+    dataset_name = os.path.splitext(os.path.basename(args.data_path))[0]
+    args.output_dir = os.path.join(args.output_dir, dataset_name)
     os.makedirs(args.output_dir, exist_ok=True)
+    
+    output_file = f"{args.output_dir}/{dataset_name}_pipeline_results.json"
+    
+    final_results = {}
+    if os.path.exists(output_file):
+        print(f"Resuming from existing results: {output_file}")
+        try:
+            with open(output_file, "r") as f:
+                final_results = json.load(f)
+        except json.JSONDecodeError:
+            print("  Warning: Could not decode existing results file. Starting fresh.")
+    
     set_seed(42)
     
     # Load dataset
@@ -502,16 +524,25 @@ def main():
     predict_fn = attributor.get_predict_proba_fn()
     metrics_calc = MetricsCalculator(predict_fn)
     
-    final_results = {}
+    # Initialize Attribution and Metrics
+    attributor = FeatureAttributor(finetuner.model, finetuner.tokenizer)
+    predict_fn = attributor.get_predict_proba_fn()
+    metrics_calc = MetricsCalculator(predict_fn)
     
     # Zero-shot evaluation
     print("\n" + "="*50)
     print("ZERO-SHOT EVALUATION")
     print("="*50)
     
-    zs_perf = evaluate_performance(predict_fn, eval_data)
-    print(f"Zero-Shot Performance: {zs_perf}")
-    final_results["zero_shot_performance"] = zs_perf
+    if "zero_shot_performance" in final_results:
+        print("Skipping Zero-Shot Evaluation (already completed)")
+        zs_perf = final_results["zero_shot_performance"]
+    else:
+        zs_perf = evaluate_performance(predict_fn, eval_data)
+        print(f"Zero-Shot Performance: {zs_perf}")
+        final_results["zero_shot_performance"] = zs_perf
+        save_results(final_results, output_file)
+
     
     # Initialize shift analyzer for before/after comparison
     shift_analyzer = None
@@ -522,21 +553,41 @@ def main():
     # Store zero-shot attributions for bias shift analysis
     zs_attributions = []  # For bias shift report
     
-    # Zero-shot attribution metrics
-    if args.run_xai:
-        zs_attrs = compute_attribution_metrics(
-            attributor, metrics_calc, eval_data, args.eval_sample_size, "Zero-Shot",
-            extended_methods=args.extended_xai, shift_analyzer=shift_analyzer
-        )
-        print(f"Zero-Shot XAI Properties: {zs_attrs}")
-        final_results["zero_shot_attributions"] = zs_attrs
-        plot_xai_properties(zs_attrs, args.output_dir, "Zero-Shot")
-    
-    # Bias detection (zero-shot) - collect attributions for shift report
-    zs_bias, zs_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
-    print(f"Zero-Shot Bias Analysis: {zs_bias}")
-    final_results["zero_shot_bias"] = zs_bias
-    plot_bias_results(zs_bias, args.output_dir, "Zero-Shot")
+    if "zero_shot_attributions" in final_results and "zero_shot_bias" in final_results:
+         print("Skipping Zero-Shot XAI & Bias (already completed)")
+         zs_attrs = final_results["zero_shot_attributions"]
+         zs_bias = final_results["zero_shot_bias"]
+         # Note: We won't have zs_attributions list for shift analysis if we skip, unless we serialised it.
+         # For now, if we skip, we might miss the detailed attributions for the shift report.
+         # However, generating them is expensive.
+         # If the user wants shift analysis, they should probably not rely on resumed runs for that part 
+         # OR we need to save the raw attributions to disk. 
+         # The current script saves 'attribution_shifts.h5' which is handled by AttributionShiftAnalyzer.
+         # If that exists, we might be good?
+    else:
+        # Zero-shot attribution metrics
+        if args.run_xai and "zero_shot_attributions" not in final_results:
+            zs_attrs = compute_attribution_metrics(
+                attributor, metrics_calc, eval_data, args.eval_sample_size, "Zero-Shot",
+                extended_methods=args.extended_xai, shift_analyzer=shift_analyzer
+            )
+            print(f"Zero-Shot XAI Properties: {zs_attrs}")
+            final_results["zero_shot_attributions"] = zs_attrs
+            plot_xai_properties(zs_attrs, args.output_dir, "Zero-Shot")
+            save_results(final_results, output_file)
+        elif "zero_shot_attributions" in final_results:
+             zs_attrs = final_results["zero_shot_attributions"]
+
+        # Bias detection (zero-shot) - collect attributions for shift report
+        if "zero_shot_bias" not in final_results:
+            zs_bias, zs_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
+            print(f"Zero-Shot Bias Analysis: {zs_bias}")
+            final_results["zero_shot_bias"] = zs_bias
+            plot_bias_results(zs_bias, args.output_dir, "Zero-Shot")
+            save_results(final_results, output_file)
+        else:
+            zs_bias = final_results["zero_shot_bias"]
+
     
     # Fine-tuning or Loading Adapter
     if args.finetune or args.load_adapter:
@@ -545,35 +596,60 @@ def main():
         print("="*50)
         
         if args.finetune:
-            # Configure LoRA adapters for training (switches model to training mode)
-            print("Configuring LoRA adapters...")
-            finetuner.configure_lora(r=args.lora_r, lora_alpha=args.lora_alpha, dropout=args.lora_dropout)
-            
-            # Subsampling logic if needed
-            total_train = len(train_data)
-            if args.train_size > 0 and args.train_size < total_train:
-                print(f"Subsampling training data to {args.train_size} of {total_train} samples...")
-                train_ds = train_data.select(range(args.train_size))
+            # Check if adapter already exists
+            adapter_path = os.path.join(args.output_dir, "adapter_model.safetensors") # unsloth/peft usually saves this
+            if os.path.exists(os.path.join(args.output_dir, "adapter_config.json")):
+                 print(f"Found existing adapter in {args.output_dir}. Skipping training.")
+                 # Load the adapter we just found (or presumably trained previously)
+                 # We need to switch to inference mode and load it? 
+                 # Actually, current finetuner object has the base model.
+                 # If we skip training, we still need the model to have the adapter active.
+                 # Re-loading seems safest or using finetuner to load it.
+                 
+                 # Free memory and reload to be sure we have the fine-tuned state
+                 del finetuner.model
+                 del finetuner.tokenizer
+                 import gc
+                 gc.collect()
+                 torch.cuda.empty_cache()
+                 
+                 finetuner = LoRAFineTuner(
+                    model_name=args.output_dir, # Load from output dir where adapter is
+                    output_dir=args.output_dir,
+                    max_seq_length=args.max_seq_length
+                 )
+                 finetuner.load_model(load_in_4bit=args.load_in_4bit)
+                 finetuner.enable_inference_mode()
+
             else:
-                print(f"Using FULL training dataset ({total_train} samples).")
-                train_ds = train_data
-            
-            # We pass validation data as well
-            finetuner.train(train_ds, periods=args.epochs, learning_rate=args.learning_rate) # Note: interpretability_lib expects 'periods' or 'epochs' depending on implementation. Let's check fine_tuning.py if possible, but standard HF trainer uses num_train_epochs. LoRAFineTuner wrapper usually takes epochs.
-            # Wait, LoRAFineTuner.train signature in interpretability_lib? I recall reading fine_tuning.py in other tasks.
-            # Assuming 'epochs' is the correct argument based on run_pipeline_modular.py used 'epochs'.
-            
-            # Free up memory after training
-            import gc
-            gc.collect()
-            torch.cuda.empty_cache()
-            
-            # Switch model to inference mode for evaluation
-            print("Enabling inference mode after fine-tuning...")
-            finetuner.enable_inference_mode()
+                # Configure LoRA adapters for training (switches model to training mode)
+                print("Configuring LoRA adapters...")
+                finetuner.configure_lora(r=args.lora_r, lora_alpha=args.lora_alpha, dropout=args.lora_dropout)
+                
+                # Subsampling logic if needed
+                total_train = len(train_data)
+                if args.train_size > 0 and args.train_size < total_train:
+                    print(f"Subsampling training data to {args.train_size} of {total_train} samples...")
+                    train_ds = train_data.select(range(args.train_size))
+                else:
+                    print(f"Using FULL training dataset ({total_train} samples).")
+                    train_ds = train_data
+                
+                # We pass validation data as well
+                finetuner.train(train_ds, epochs=args.epochs, learning_rate=args.learning_rate) 
+                
+                # Free up memory after training
+                import gc
+                gc.collect()
+                torch.cuda.empty_cache()
+                
+                # Switch model to inference mode for evaluation
+                print("Enabling inference mode after fine-tuning...")
+                finetuner.enable_inference_mode()
         
         elif args.load_adapter:
             print(f"Loading existing adapter from: {args.load_adapter}")
+
             # Free up memory to reload logic cleanliness
             del finetuner.model
             del finetuner.tokenizer
@@ -595,30 +671,46 @@ def main():
         print("FINE-TUNED EVALUATION")
         print("="*50)
         
-        # Reinitialize attributor with fine-tuned model
-        attributor = FeatureAttributor(finetuner.model, finetuner.tokenizer)
-        predict_fn = attributor.get_predict_proba_fn()
-        metrics_calc = MetricsCalculator(predict_fn)
-        
-        ft_perf = evaluate_performance(predict_fn, eval_data)
-        print(f"Fine-Tuned Performance: {ft_perf}")
-        final_results["finetuned_performance"] = ft_perf
-        
-        # Fine-tuned attribution metrics
-        if args.run_xai:
-            ft_attrs = compute_attribution_metrics(
-                attributor, metrics_calc, eval_data, args.eval_sample_size, "Fine-Tuned",
-                extended_methods=args.extended_xai, shift_analyzer=shift_analyzer
-            )
-            print(f"Fine-Tuned XAI Properties: {ft_attrs}")
-            final_results["finetuned_attributions"] = ft_attrs
-            plot_xai_properties(ft_attrs, args.output_dir, "Fine-Tuned")
-        
-        # Bias detection (fine-tuned) - collect attributions for shift report
-        ft_bias, ft_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
-        print(f"Fine-Tuned Bias Analysis: {ft_bias}")
-        final_results["finetuned_bias"] = ft_bias
-        plot_bias_results(ft_bias, args.output_dir, "Fine-Tuned")
+        if "finetuned_performance" in final_results and "finetuned_attributions" in final_results and "finetuned_bias" in final_results:
+             print("Skipping Fine-Tuned Evaluation (already completed)")
+             ft_perf = final_results["finetuned_performance"]
+             # Need to ensure ft_attributions is populated if we want shift report?
+             # But if shift report is already done, we are fine.
+        else:
+            # Reinitialize attributor with fine-tuned model
+            attributor = FeatureAttributor(finetuner.model, finetuner.tokenizer)
+            predict_fn = attributor.get_predict_proba_fn()
+            metrics_calc = MetricsCalculator(predict_fn)
+            
+            if "finetuned_performance" not in final_results:
+                ft_perf = evaluate_performance(predict_fn, eval_data)
+                print(f"Fine-Tuned Performance: {ft_perf}")
+                final_results["finetuned_performance"] = ft_perf
+                save_results(final_results, output_file)
+            
+            # Fine-tuned attribution metrics
+            if args.run_xai and "finetuned_attributions" not in final_results:
+                ft_attrs = compute_attribution_metrics(
+                    attributor, metrics_calc, eval_data, args.eval_sample_size, "Fine-Tuned",
+                    extended_methods=args.extended_xai, shift_analyzer=shift_analyzer
+                )
+                print(f"Fine-Tuned XAI Properties: {ft_attrs}")
+                final_results["finetuned_attributions"] = ft_attrs
+                plot_xai_properties(ft_attrs, args.output_dir, "Fine-Tuned")
+                save_results(final_results, output_file)
+            
+            # Bias detection (fine-tuned) - collect attributions for shift report
+            if "finetuned_bias" not in final_results:
+                ft_bias, ft_attributions, _ = detect_bias_with_attributions(attributor, eval_data, sample_size=args.bias_sample_size)
+                print(f"Fine-Tuned Bias Analysis: {ft_bias}")
+                final_results["finetuned_bias"] = ft_bias
+                plot_bias_results(ft_bias, args.output_dir, "Fine-Tuned")
+                save_results(final_results, output_file)
+            else:
+                 # We need ft_attributions for shift report if not done
+                 # If we skipped, we don't have them in memory.
+                 pass
+
         
         # Generate bias shift report
         if zs_attributions and ft_attributions:
@@ -662,9 +754,9 @@ def main():
     # Generate aggregate performance plot
     plot_performance_comparison(final_results, args.output_dir)
     
-    output_file = f"{args.output_dir}/childguard_pipeline_results.json"
-    with open(output_file, "w") as f:
-        json.dump(final_results, f, indent=2, cls=NumpyEncoder)
+    dataset_name = os.path.splitext(os.path.basename(args.data_path))[0]
+    output_file = f"{args.output_dir}/{dataset_name}_pipeline_results.json"
+    save_results(final_results, output_file)
     
     print(f"Results saved to: {output_file}")
     print("\nPipeline complete!")

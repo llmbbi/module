@@ -311,7 +311,7 @@ class NumpyEncoder(json.JSONEncoder):
 def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", default="unsloth/Llama-3.2-1B")
-    parser.add_argument("--output-dir", default="outputs/mabsa_pipeline")
+    parser.add_argument("--output-dir", default="interpretability_lib_mabsa/outputs/mabsa_pipeline")
     parser.add_argument("--train-size", type=int, default=30000, help="Number of stratified training samples (default 30000). 0 = full dataset")
     parser.add_argument("--val-size", type=int, default=500, help="Number of stratified validation samples (default 500). 0 = full validation split")
     parser.add_argument("--test-size", type=int, default=500, help="Number of stratified test samples for final evaluation (default 500). 0 = full test split")
@@ -443,21 +443,35 @@ def plot_xai_properties(results, output_dir, phase_name=""):
 
 
 def plot_performance_comparison(final_results, output_dir):
-    """Plots model performance metrics for zero-shot and fine-tuned models."""
+    """Plots model performance metrics for zero-shot, fine-tuned, and test models."""
     metrics = ["accuracy", "precision", "recall", "f1", "mcc"]
     zs_perf = final_results.get("zero_shot_performance", {})
     ft_perf = final_results.get("finetuned_performance", {})
+    test_perf = final_results.get("test_performance", {})
 
-    if not zs_perf: return
+    if not zs_perf and not ft_perf and not test_perf:
+        print("  [WARNING] No performance data found — skipping mabsa_model_performance_comparison.png")
+        return
 
+    # Determine how many bars and their positions
+    phases = {}
+    if zs_perf:
+        phases["Zero-Shot"] = (zs_perf, "#1f77b4")
+    if ft_perf:
+        phases["Fine-Tuned"] = (ft_perf, "#ff7f0e")
+    if test_perf:
+        phases["Test"] = (test_perf, "#2ca02c")
+
+    n_phases = len(phases)
     x = np.arange(len(metrics))
-    width = 0.35
+    width = 0.8 / max(n_phases, 1)
     fig, ax = plt.subplots(figsize=(10, 6))
 
-    bars1 = ax.bar(x - width/2, [zs_perf.get(m, 0) for m in metrics], width, label="Zero-Shot", color="#1f77b4", alpha=0.8)
-
-    if ft_perf:
-        bars2 = ax.bar(x + width/2, [ft_perf.get(m, 0) for m in metrics], width, label="Fine-Tuned", color="#ff7f0e", alpha=0.8)
+    all_bars = []
+    for i, (label, (perf, color)) in enumerate(phases.items()):
+        offset = (i - (n_phases - 1) / 2) * width
+        bars = ax.bar(x + offset, [perf.get(m, 0) for m in metrics], width, label=label, color=color, alpha=0.8)
+        all_bars.append(bars)
 
     ax.set_ylabel("Score")
     ax.set_title("M-ABSA Model Performance Comparison")
@@ -471,13 +485,14 @@ def plot_performance_comparison(final_results, output_dir):
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height, f'{height:.2f}', ha='center', va='bottom', fontsize=8)
 
-    add_labels(bars1)
-    if ft_perf:
-        add_labels(bars2)
+    for bars in all_bars:
+        add_labels(bars)
 
     plt.tight_layout()
-    plt.savefig(f"{output_dir}/mabsa_model_performance_comparison.png", dpi=300)
+    out_path = f"{output_dir}/mabsa_model_performance_comparison.png"
+    plt.savefig(out_path, dpi=300)
     plt.close()
+    print(f"  Performance comparison chart saved to: {out_path}")
 
 
 def plot_bias_results(bias_results, output_dir, phase_name=""):

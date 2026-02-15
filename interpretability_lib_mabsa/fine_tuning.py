@@ -17,6 +17,7 @@ from transformers import (
     default_data_collator,
     EarlyStoppingCallback,
 )
+from transformers.trainer_utils import get_last_checkpoint
 from trl import SFTTrainer, SFTConfig
 from datasets import Dataset
 
@@ -217,6 +218,7 @@ class LoRAFineTunerMABSA:
                 output_dir=f"{self.output_dir}/checkpoints",
                 num_train_epochs=epochs,
                 per_device_train_batch_size=batch_size,
+                per_device_eval_batch_size=batch_size,
                 gradient_accumulation_steps=4,
                 warmup_ratio=0.05,
                 learning_rate=learning_rate,
@@ -238,8 +240,16 @@ class LoRAFineTunerMABSA:
             ),
         )
 
+        if os.path.isdir(f"{self.output_dir}/checkpoints"):
+            checkpoint = get_last_checkpoint(f"{self.output_dir}/checkpoints")
+        else:
+            checkpoint = None
+        
+        if checkpoint:
+             print(f"Resuming from checkpoint: {checkpoint}")
+
         print("Starting training…")
-        trainer.train()
+        trainer.train(resume_from_checkpoint=checkpoint)
         print("Training complete.")
 
         save_path = os.path.join(self.output_dir, "lora_adapters")

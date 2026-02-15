@@ -11,15 +11,32 @@
 
 # ── Multilingual-capable models (7B class, base/non-instruct) ──────────
 MODELS=(
+
+    # "unsloth/Llama-3.2-1B"
+    # "microsoft/phi-1_5"
+    # "unsloth/DeepSeek-R1-Distill-Qwen-1.5B"
+    "unsloth/gemma-3-1b-it"
+    "unsloth/Qwen2.5-1.5B"
+
+    "meta-llama/Llama-3.2-3B"
+    "tiiuae/Falcon3-3B-Instruct"
+    "ibm-granite/granite-3.1-3b-a800m-instruct"
+    "stabilityai/stablelm-zephyr-3b"
+    "ibm-research/PowerLM-3b"
+    "togethercomputer/RedPajama-INCITE-Instruct-3B-v1"
+
     # "Qwen/Qwen2.5-7B"                        # Best multilingual 7B; 29+ languages
-    "meta-llama/Meta-Llama-3.1-8B"            # 8 official langs, strong cross-lingual transfer
-    "mistralai/Mistral-7B-v0.3"               # Improved tokenizer over v0.1, better non-English
-    "tiiuae/falcon-7b"                        # 30+ lang pre-training data
+    # "meta-llama/Meta-Llama-3.1-8B"            # 8 official langs, strong cross-lingual transfer
+    # "mistralai/Mistral-7B-v0.3"               # Improved tokenizer over v0.1, better non-English
+    # "tiiuae/falcon-7b"                        # 30+ lang pre-training data
     # Older / less multilingual (kept for reference, uncomment to include):
     # "mistralai/Mistral-7B-v0.1"             # Weak multilingual (English-heavy tokenizer)
     # "meta-llama/Llama-2-7b-hf"              # Weak multilingual (English-heavy)
     # "Qwen/Qwen1.5-7B"                       # Good multilingual, superseded by Qwen2.5
 )
+
+# ── Base directory for all MABSA outputs ───────────────────────────────
+MABSA_OUTPUTS_BASE="interpretability_lib_mabsa/outputs"
 
 # ── Language filter ────────────────────────────────────────────────────
 LANG_FILTER="en,de,fr,es,nl,pt,ru,tr,ar,zh,ja,ko,hi,th,vi"
@@ -29,7 +46,7 @@ if [ "$1" = "--resume" ] && [ -n "$2" ]; then
     OUTPUT_ROOT="$2"
     echo "RESUMING from existing output directory: $OUTPUT_ROOT"
 else
-    OUTPUT_ROOT="outputs/mabsa_family_comparison_$(date +%m%d_%H%M)"
+    OUTPUT_ROOT="${MABSA_OUTPUTS_BASE}/mabsa_family_comparison_$(date +%m%d_%H%M)"
 fi
 mkdir -p "$OUTPUT_ROOT"
 
@@ -61,6 +78,22 @@ for MODEL in "${MODELS[@]}"; do
         echo "============================================================"
     fi
 
+    # ── Find most recent existing LoRA adapter for this model ─────
+    ADAPTER_ARG=""
+    EXISTING_ADAPTER=$(
+        find "${MABSA_OUTPUTS_BASE}" -path "*/${MODEL_NAME_BASE}/lora_adapters/adapter_config.json" \
+            -printf '%T@ %h\n' 2>/dev/null \
+        | sort -rn \
+        | head -1 \
+        | awk '{print $2}'
+    )
+    if [ -n "$EXISTING_ADAPTER" ] && [ -d "$EXISTING_ADAPTER" ]; then
+        echo "  Reusing existing adapter: $EXISTING_ADAPTER"
+        ADAPTER_ARG="--load-adapter $EXISTING_ADAPTER"
+    else
+        echo "  No existing adapter found — will train from scratch"
+    fi
+
     # Build language filter argument
     LANG_ARG=""
     if [ -n "$LANG_FILTER" ]; then
@@ -86,6 +119,7 @@ for MODEL in "${MODELS[@]}"; do
         --extended-xai \
         --run-shift-analysis \
         --bias-sample-size 100 \
+        $ADAPTER_ARG \
         $LANG_ARG
 
     if [ $? -ne 0 ]; then

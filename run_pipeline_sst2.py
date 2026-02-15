@@ -27,7 +27,7 @@ from datasets import load_dataset
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, matthews_corrcoef
 import torch
 from transformers import set_seed
-from interpretability_lib import (
+from interpretability_lib_sst2 import (
     LoRAFineTuner, 
     FeatureAttributor, 
     MetricsCalculator, 
@@ -53,7 +53,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-name", default="unsloth/Llama-3.2-1B")
     # Forcing default output-dir to ensure consistent comparison if not specified
-    parser.add_argument("--output-dir", default="outputs/modular_pipeline_enhanced")
+    parser.add_argument("--output-dir", default="interpretability_lib_sst2/outputs/sst2_pipeline")
     parser.add_argument("--train-size", type=int, default=0, help="Number of training samples to use. >0 subsamples, 0 or negative = full dataset")
     parser.add_argument("--eval-sample-size", type=int, default=50)
     parser.add_argument("--epochs", type=float, default=3.0)

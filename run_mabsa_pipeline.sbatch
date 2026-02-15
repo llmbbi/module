@@ -6,8 +6,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=48G
 #SBATCH --time=12:00:00
-#SBATCH --output=logs/mabsa_pipeline.out
-#SBATCH --error=logs/mabsa_pipeline.err
+#SBATCH --output=interpretability_lib_mabsa/logs/mabsa_pipeline.out
+#SBATCH --error=interpretability_lib_mabsa/logs/mabsa_pipeline.err
 #SBATCH --nodelist=atl1-1-01-005-5-0
 
 export CONDA_PREFIX=/storage/ice1/6/3/jyoon370/miniconda3/envs/llm1b

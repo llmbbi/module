@@ -10,23 +10,23 @@ MODELS=(
     # "unsloth/gemma-3-1b-it"
     # "unsloth/Qwen2.5-1.5B"
 
-    # tiiuae/Falcon3-7B-Instruct
-    # Qwen/Qwen2.5-7B-Instruct
-    # nvidia/AceInstruct-7B
-    # Intel/neural-chat-7b-v3-1
-    # berkeley-nest/Starling-LM-7B-alpha
-    # mistralai/Mistral-7B-Instruct-v0.3
-
-    meta-llama/Llama-3.2-3B
+    # meta-llama/Llama-3.2-3B
     # tiiuae/Falcon3-3B-Instruct
     # ibm-granite/granite-3.1-3b-a800m-instruct
-    stabilityai/stablelm-zephyr-3b
+    # stabilityai/stablelm-zephyr-3b
     ibm-research/PowerLM-3b
-    # togethercomputer/RedPajama-INCITE-Instruct-3B-v1
+    togethercomputer/RedPajama-INCITE-Instruct-3B-v1
+    
+    tiiuae/Falcon3-7B-Instruct
+    Qwen/Qwen2.5-7B-Instruct
+    nvidia/AceInstruct-7B
+    Intel/neural-chat-7b-v3-1
+    berkeley-nest/Starling-LM-7B-alpha
+    mistralai/Mistral-7B-Instruct-v0.3
     )
 
 # Output root directory
-OUTPUT_ROOT="outputs/family_comparison_$(date +%m%d_%H%M)"
+OUTPUT_ROOT="interpretability_lib_sst2/outputs/family_comparison_$(date +%m%d_%H%M)"
 mkdir -p "$OUTPUT_ROOT"
 
 echo "Starting Multi-Family Model Comparison Pipeline..."
